@@ -200,6 +200,7 @@ module SpatialDiscretization
 !           Initialize models
 !           -----------------
             call InitializeLESModel(LESModel, controlVariables)
+            call CheckCharacteristicBoundaryCompatibility(LESModel % active)
 !
 !           Initialize Shock-Capturing
 !           --------------------------

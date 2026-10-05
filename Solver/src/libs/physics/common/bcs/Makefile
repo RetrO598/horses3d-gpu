@@ -10,6 +10,8 @@ MOD_FLAG?=-J
 
 LIBOBJS_NS =  ./build_ns/GenericBoundaryConditionClass.o \
         ./build_ns/InflowBC.o \
+        ./build_ns/TotalInflowBC.o \
+		./build_ns/FarfieldBC.o \
 		./build_ns/OutflowBC.o \
 		./build_ns/NoSlipWallBC.o \
 		./build_ns/FreeSlipWallBC.o \
@@ -22,6 +24,8 @@ LIBOBJS_NS =  ./build_ns/GenericBoundaryConditionClass.o \
 
 LIBOBJS_NSSA = 	./build_nssa/GenericBoundaryConditionClass.o \
 		./build_nssa/InflowBC.o \
+		./build_nssa/TotalInflowBC.o \
+		./build_nssa/FarfieldBC.o \
 		./build_nssa/OutflowBC.o \
 		./build_nssa/NoSlipWallBC.o \
 		./build_nssa/FreeSlipWallBC.o \

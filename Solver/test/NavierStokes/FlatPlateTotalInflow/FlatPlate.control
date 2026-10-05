@@ -1,0 +1,76 @@
+! Laminar flat plate with prescribed inlet total conditions.
+Flow equations                   = NS
+mesh file name                   = MESH/flatplate_65x65x1.msh
+reference length (m)             = 0.3048
+Polynomial order                 = 2
+Discretization nodes             = Gauss-Lobatto
+
+mach number                      = 0.2
+Reynolds number                  = 1301233.166
+Prandtl number                   = 0.72
+reference temperature (k)        = 297.62
+reference pressure (pa)          = 97250.0
+AOA theta                        = 0.0
+AOA phi                          = 0.0
+
+inviscid discretization          = standard
+riemann solver                   = roe
+viscous discretization           = BR1
+simulation type                  = steady-state
+time integration                 = explicit
+explicit method                  = rk3
+Number of time steps             = 50000
+Convergence tolerance            = 1.d-8
+cfl                              = 1.0
+dcfl                             = 1.0
+
+Output Interval                  = 100
+Number of plot points            = 3
+solution file name               = RESULTS/FlatPlate.hsol
+save gradients with solution     = .true.
+restart                          = .true.
+restart file name                = RESULTS/FlatPlate.hsol
+mesh partitioning                = SFC
+
+#define boundary inlet
+   type = totalinflow
+   total pressure = 100000.0
+   total temperature = 300.0
+   aoatheta = 0.0
+   aoaphi = 0.0
+#end
+
+#define boundary outlet
+   type = Outflow
+   pressure = 97250.0
+#end
+
+#define boundary farfield
+   type = Outflow
+   pressure = 97250.0
+#end
+
+#define boundary symmetry
+   type = FreeSlipWall
+#end
+
+#define boundary wall
+   type = NoSlipWall
+   wall type (adiabatic/isothermal) = adiabatic
+#end
+
+#define boundary front
+   type = FreeSlipWall
+#end
+
+#define boundary back
+   type = FreeSlipWall
+#end
+
+#define surface monitor 1
+   Name = plate-drag
+   Marker = wall
+   Variable = drag
+   Direction = [1.0,0.0,0.0]
+   Reference surface = 0.0009290304
+#end

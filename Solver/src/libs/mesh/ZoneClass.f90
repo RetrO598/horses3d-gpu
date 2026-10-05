@@ -268,6 +268,10 @@ module ZoneClass
          select case(self % zoneBCType)
             case(INFLOW_BC)
                self % zoneBCName = "inflow"
+            case(FARFIELD_BC)
+               self % zoneBCName = "farfield"
+            case(TOTALINFLOW_BC)
+               self % zoneBCName = "totalinflow"
             case(OUTFLOW_BC)
                self % zoneBCName = "outflow"
             case(NOSLIPWALL_BC)
@@ -361,6 +365,8 @@ module ZoneClass
          print*, "Boundary type " ,trim(keyval), " not recognized."
          print*, "Options available are:"
          print*, "   * Inflow"
+         print*, "   * Farfield (compressible Navier-Stokes: laminar or SA)"
+         print*, "   * TotalInflow (compressible Navier-Stokes: laminar or SA)"
          print*, "   * Outflow"
          print*, "   * NoSlipWall"
          print*, "   * FreeSlipWall"

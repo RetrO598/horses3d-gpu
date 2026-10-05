@@ -1,0 +1,4 @@
+!Makefile
+!SETUP/Makefile
+Smoke.control
+*.log

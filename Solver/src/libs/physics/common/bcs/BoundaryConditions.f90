@@ -7,6 +7,10 @@ module BoundaryConditions
    use FileReadingUtilities,          only: GetKeyword, GetValueAsString, PreprocessInputLine
    use GenericBoundaryConditionClass, only: GenericBC_t, NS_BC, C_BC, MU_BC
    use InflowBCClass,                 only: InflowBC_t
+#if defined(NAVIERSTOKES) && !defined(CAHNHILLIARD)
+   use TotalInflowBCClass,             only: TotalInflowBC_t
+   use FarfieldBCClass,                only: FarfieldBC_t
+#endif
    use OutflowBCClass,                only: OutflowBC_t
    use NoSlipWallBCClass,             only: NoSlipWallBC_t
    use FreeSlipWallBCClass,           only: FreeSlipWallBC_t
@@ -24,6 +28,7 @@ module BoundaryConditions
    private
    public   BCs, ConstructBoundaryConditions, DestructBoundaryConditions, SetBoundaryConditionsEqn, DescribeBoundaryConditions
    public   NS_BC, C_BC, MU_BC
+   public   CheckCharacteristicBoundaryCompatibility
 
    type BCSet_t
       class(GenericBC_t), allocatable :: bc
@@ -86,6 +91,30 @@ module BoundaryConditions
                type is (OutflowBC_t)
                   bc = OutflowBC_t(trim(zoneNames(zID)))
                end select
+            case(TOTALINFLOW_BC)
+#if defined(NAVIERSTOKES) && !defined(CAHNHILLIARD)
+               allocate(TotalInflowBC_t :: BCs(zID) % bc)
+               select type(bc => BCs(zID) % bc)
+               type is (TotalInflowBC_t)
+                  bc = TotalInflowBC_t(trim(zoneNames(zID)))
+               end select
+#else
+               print*, "TotalInflow is only supported for compressible Navier-Stokes (laminar or SA)."
+               errorMessage(STD_OUT)
+               error stop 99
+#endif
+            case(FARFIELD_BC)
+#if defined(NAVIERSTOKES) && !defined(CAHNHILLIARD)
+               allocate(FarfieldBC_t :: BCs(zID) % bc)
+               select type(bc => BCs(zID) % bc)
+               type is (FarfieldBC_t)
+                  bc = FarfieldBC_t(trim(zoneNames(zID)))
+               end select
+#else
+               print*, "Farfield is only supported for compressible Navier-Stokes (laminar or SA)."
+               errorMessage(STD_OUT)
+               error stop 99
+#endif
             case(NOSLIPWALL_BC)
                allocate(NoSlipWallBC_t   :: BCs(zID) % bc)
                select type(bc => BCs(zID) % bc)
@@ -124,6 +153,27 @@ module BoundaryConditions
          end do
 
       end subroutine ConstructBoundaryConditions
+
+      subroutine CheckCharacteristicBoundaryCompatibility(lesActive)
+         implicit none
+         logical, intent(in) :: lesActive
+!
+!        ---------------
+!        Local variables
+!        ---------------
+!
+         integer :: bcID
+
+         if ( .not. lesActive .or. .not. allocated(BCs) ) return
+         do bcID = 1, size(BCs)
+            if ( BCs(bcID) % bc % BCType .eq. "totalinflow" .or. &
+                 BCs(bcID) % bc % BCType .eq. "farfield" ) then
+               print*, trim(BCs(bcID) % bc % BCType), " supports laminar or SA Navier-Stokes; disable the LES model."
+               errorMessage(STD_OUT)
+               error stop 99
+            end if
+         end do
+      end subroutine CheckCharacteristicBoundaryCompatibility
 !
 !////////////////////////////////////////////////////////////////////////////
 !

@@ -65,9 +65,10 @@
             enumerator :: INFLOW_BC = 1 , OUTFLOW_BC
             enumerator :: NOSLIPWALL_BC , FREESLIPWALL_BC
             enumerator :: PERIODIC_BC   , USERDEFINED_BC
+            enumerator :: TOTALINFLOW_BC = 9, FARFIELD_BC
          end enum
    
-         character(len=BC_STRING_LENGTH), dimension(8)  :: implementedBCNames = [&
+         character(len=BC_STRING_LENGTH), dimension(10) :: implementedBCNames = [&
                    "inflow              ",  &
                    "outflow             ",  &
                    "noslipwall          ",  &
@@ -75,7 +76,9 @@
                    "periodic            ",  &
                    "user-defined        ",  &
                    "manufacturedsol     ",  &
-                   "msoutflowspecifyp   "]
+                   "msoutflowspecifyp   ",  &
+                   "totalinflow         ",  &
+                   "farfield            "]
 
          contains
             subroutine SetSolver(which)
