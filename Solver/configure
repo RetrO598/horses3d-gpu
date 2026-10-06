@@ -82,6 +82,7 @@ TEST_CASES="./Euler/BoxAroundCircle \
             ./NavierStokes/TaylorGreenSVVLES \
             ./NavierStokes/ManufacturedSolutionsSA \
             ./NavierStokes/FlatPlateSA \
+            ./NavierStokes/FlatPlateTotalInflow \
             ./NavierStokes/BIRK5NumJac \
             ./NavierStokes/CylinderGMM \
             ./NavierStokes/Cylinder_pAdaptationRL \
