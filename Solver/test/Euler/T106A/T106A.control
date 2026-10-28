@@ -1,0 +1,79 @@
+! T106A: inviscid analogue of HOW5 CS2, isentropic exit Mach 0.405.
+! HOW5 inlet angle=45.5 deg; CAD orientation checked against HOW5 coordinates.
+! ASSUMED total scales: p0=101325 Pa, T0=300 K; see README.md.
+! GPU-compatible Euler equations through NS with zero physical viscosity.
+Flow equations                   = NS
+mesh file name                   = MESH/T106A_1layer.msh
+reference length (m)             = 1.0
+Polynomial order                 = 2
+Discretization nodes             = Gauss-Lobatto
+
+! Reference state: isentropic exit, gamma=1.4 and HORSES R=287.15.
+! Reference Mach is an exit reference value, not prescribed inlet Mach.
+mach number                      = 0.405
+Reynolds number                  = 0.0
+Prandtl number                   = 0.71
+reference temperature (k)        = 290.47109570538487
+reference pressure (pa)          = 90500.80687392135
+AOA theta                        = 45.5
+AOA phi                          = 0.0
+gravity direction                = [0.0,0.0,0.0]
+LES model                        = none
+enable shock-capturing           = .false.
+
+inviscid discretization          = split-form
+split form                       = chandrasekar
+riemann solver                   = rusanov
+compute gradients               = .true.
+gradient variables              = state
+viscous discretization           = BR1
+simulation type                  = steady-state
+time integration                 = explicit
+explicit method                  = ssprk33
+Number of time steps             = 10000
+Convergence tolerance            = 1.d-13
+cfl                              = 0.25
+dcfl                             = 0.25
+
+Output Interval                  = 100
+Number of plot points            = 3
+solution file name               = RESULTS/T106A.hsol
+save gradients with solution     = .false.
+restart                          = .false.
+restart file name                = RESULTS/T106A.hsol
+mesh partitioning                = SFC
+
+#define boundary inlet
+   type = totalinflow
+   total pressure = 101325.0
+   total temperature = 300.0
+   aoatheta = 45.5
+   aoaphi = 0.0
+#end
+
+#define boundary outlet
+   type = Outflow
+   pressure = 90500.80687392135
+#end
+
+#define boundary blade
+   type = FreeSlipWall
+#end
+
+#define boundary periodic_lower
+   type = Periodic
+   coupled boundary = periodic_upper
+#end
+
+#define boundary periodic_upper
+   type = Periodic
+   coupled boundary = periodic_lower
+#end
+
+#define boundary front
+   type = FreeSlipWall
+#end
+
+#define boundary back
+   type = FreeSlipWall
+#end

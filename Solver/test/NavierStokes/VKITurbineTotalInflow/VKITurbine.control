@@ -1,0 +1,70 @@
+! Quasi-two-dimensional VKI turbine cascade with inlet total conditions.
+Flow equations                   = NSSA
+mesh file name                   = MESH/vki_inviscid_p3_mesh.h5
+reference length (m)             = 1.0
+Polynomial order                 = 2
+Discretization nodes             = Gauss-Lobatto
+
+mach number                      = 0.5
+Reynolds number                  = 6.0e6
+Prandtl number                   = 0.72
+Turbulent Prandtl number         = 0.9
+reference temperature (k)        = 350.0
+reference pressure (pa)          = 66666.84083970786
+AOA theta                        = 0.0
+AOA phi                          = 0.0
+
+inviscid discretization          = standard
+riemann solver                   = roe
+viscous discretization           = BR1
+simulation type                  = steady-state
+time integration                 = explicit
+explicit method                  = rk3
+Number of time steps             = 10000
+Convergence tolerance            = 1.d-12
+cfl                              = 0.4
+dcfl                             = 0.4
+
+Output Interval                  = 10
+Number of plot points            = 3
+solution file name               = RESULTS/VKITurbine.hsol
+save gradients with solution     = .true.
+restart                          = .false.
+restart file name                = RESULTS/VKITurbine.hsol
+mesh partitioning                = SFC
+
+#define boundary inflow
+   type = totalinflow
+   total pressure = 90400.0
+   total temperature = 404.1
+   aoatheta = 0.0
+   aoaphi = 0.0
+#end
+
+#define boundary outflow
+   type = Outflow
+   pressure = 52300.0
+#end
+
+#define boundary airfoil
+   type = NoSlipWall
+   wall type (adiabatic/isothermal) = adiabatic
+#end
+
+#define boundary periodic_1
+   type = Periodic
+   coupled boundary = periodic_2
+#end
+
+#define boundary periodic_2
+   type = Periodic
+   coupled boundary = periodic_1
+#end
+
+#define boundary front
+   type = FreeSlipWall
+#end
+
+#define boundary back
+   type = FreeSlipWall
+#end

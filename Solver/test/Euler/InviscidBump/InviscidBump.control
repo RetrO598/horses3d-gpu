@@ -1,0 +1,69 @@
+! FEST-3D smooth bump: Mach approximately 0.5, total-condition inlet.
+! GPU-compatible Euler equations through NS with zero physical viscosity.
+Flow equations                   = NS
+mesh file name                   = MESH/smooth_bump_97x49x2.msh
+reference length (m)             = 1.0
+Polynomial order                 = 2
+Discretization nodes             = Gauss-Lobatto
+
+! Match rho=1.225 kg/m3, u=170.14 m/s, p=101325 Pa using HORSES R=287.15.
+mach number                      = 0.4999794434461673
+Reynolds number                  = 0.0
+Prandtl number                   = 0.72
+reference temperature (k)        = 288.052536006567
+reference pressure (pa)          = 101325.0
+AOA theta                        = 0.0
+AOA phi                          = 0.0
+gravity direction                = [0.0,0.0,0.0]
+LES model                        = none
+enable shock-capturing           = .false.
+
+inviscid discretization          = standard
+riemann solver                   = roe
+compute gradients               = .true.
+gradient variables              = state
+viscous discretization           = BR1
+simulation type                  = steady-state
+time integration                 = explicit
+explicit method                  = rk3
+Number of time steps             = 10000
+Convergence tolerance            = 1.d-13
+cfl                              = 0.25
+dcfl                             = 0.25
+
+Output Interval                  = 100
+Number of plot points            = 3
+solution file name               = RESULTS/InviscidBump.hsol
+save gradients with solution     = .false.
+restart                          = .false.
+restart file name                = RESULTS/InviscidBump.hsol
+mesh partitioning                = SFC
+
+#define boundary inlet
+   type = totalinflow
+   total pressure = 120191.34842258149
+   total temperature = 302.45397855774735
+   aoatheta = 0.0
+   aoaphi = 0.0
+#end
+
+#define boundary outlet
+   type = Outflow
+   pressure = 101325.0
+#end
+
+#define boundary lower_wall
+   type = FreeSlipWall
+#end
+
+#define boundary upper_wall
+   type = FreeSlipWall
+#end
+
+#define boundary front
+   type = FreeSlipWall
+#end
+
+#define boundary back
+   type = FreeSlipWall
+#end

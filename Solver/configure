@@ -36,6 +36,8 @@ TEST_CASES="./Euler/BoxAroundCircle \
             ./Euler/BoxAroundCircle_pAdapted \
             ./Euler/BoxAroundCirclePirozzoli \
             ./Euler/Diffuser \
+            ./Euler/InviscidBump \
+            ./Euler/T106A \
             ./Euler/UniformFlow \
             ./Euler/JFNK \
             ./Euler/TaylorGreenKEPEC \
@@ -83,6 +85,7 @@ TEST_CASES="./Euler/BoxAroundCircle \
             ./NavierStokes/ManufacturedSolutionsSA \
             ./NavierStokes/FlatPlateSA \
             ./NavierStokes/FlatPlateTotalInflow \
+            ./NavierStokes/VKITurbineTotalInflow \
             ./NavierStokes/BIRK5NumJac \
             ./NavierStokes/CylinderGMM \
             ./NavierStokes/Cylinder_pAdaptationRL \
