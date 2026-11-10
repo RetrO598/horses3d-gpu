@@ -41,7 +41,7 @@ module OutflowBCClass
 !
    type, extends(GenericBC_t) ::  OutflowBC_t
 #ifdef FLOW
-      real(kind=RP)     :: pExt
+      real(kind=RP), private :: pExt
 #endif
       contains
          procedure         :: Destruct          => OutflowBC_Destruct
@@ -51,6 +51,10 @@ module OutflowBCClass
          procedure         :: CreateDeviceData  => OutflowBC_CreateDeviceData
          procedure         :: ExitDeviceData    => OutflowBC_ExitDeviceData
          procedure         :: FlowNeumann       => OutflowBC_FlowNeumann
+#endif
+#if defined(NAVIERSTOKES)
+         procedure         :: GetPressurePa     => OutflowBC_GetPressurePa
+         procedure         :: SetPressurePa     => OutflowBC_SetPressurePa
 #endif
 #if defined(CAHNHILLIARD)
          procedure         :: PhaseFieldState   => OutflowBC_PhaseFieldState
@@ -255,6 +259,37 @@ module OutflowBCClass
 !
 #if defined(NAVIERSTOKES)
 
+
+      function OutflowBC_GetPressurePa(self) result(pressure)
+         class(OutflowBC_t), intent(in) :: self
+         real(kind=RP) :: pressure
+         pressure = self%pExt * refValues%p
+      end function OutflowBC_GetPressurePa
+
+      subroutine OutflowBC_SetPressurePa(self, pressure, status)
+         use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+         class(OutflowBC_t), intent(inout) :: self
+         real(kind=RP), intent(in) :: pressure
+         integer, intent(out) :: status
+         real(kind=RP) :: value
+
+         ! Runtime interface: call at a complete-step boundary, after device
+         ! creation and before device destruction. No MPI or feedback logic.
+         status = 1
+         ! Keep finite checks separate: Fortran does not require short-circuit
+         ! evaluation, and comparing NaN can trap in debug builds.
+         if (.not. ieee_is_finite(pressure)) return
+         if (pressure <= 0) return
+         if (.not. ieee_is_finite(refValues%p)) return
+         if (refValues%p <= 0) return
+         value = pressure / refValues%p
+         if (.not. ieee_is_finite(value)) return
+         if (value <= 0) return
+         !$acc wait
+         self%pExt = value
+         !$acc update device(self%pExt)
+         status = 0
+      end subroutine OutflowBC_SetPressurePa
 
       subroutine OutflowBC_FlowState(self, mesh, zone)
          use HexMeshClass

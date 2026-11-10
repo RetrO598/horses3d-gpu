@@ -29,6 +29,14 @@
 !
 !  Last, the END_OF_FILE indicator (integer) is introduced (just to ensure)
 !
+!  NS boundary mass-flow statistics may append an optional indexed extension
+!  after that original terminator, followed by a locator and another
+!  END_OF_FILE marker. Field offsets and array layouts remain unchanged.
+!  Readers that only need the solution arrays need not parse this extension.
+!  The time integrator appends autosave state after SaveSolution; the NS main
+!  program appends final state after the final SaveSolution has closed.
+!  See MassFlowMonitorManager for extension layout and restart validation.
+!
 !/////////////////////////////////////////////////////////////////////////////////////
 !
 #include "Includes.h"

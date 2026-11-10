@@ -192,10 +192,17 @@
          saveSensor       = controlVariables % logicalValueForKey(saveSensorToSolutionKey)
          saveLES = controlVariables % logicalValueForKey(saveLESToSolutionKey)
          CALL sem % mesh % SaveSolution(sem % numberOfTimeSteps, timeIntegrator % time, solutionFileName, saveGradients, saveSensor, saveLES)
+#if !defined(SPALARTALMARAS) && !defined(CAHNHILLIARD)
+         call timeIntegrator % SaveMassFlowState(solutionFileName, sem % numberOfTimeSteps, timeIntegrator % time)
+#endif
          if ( sem % particles % active ) then
             call sem % particles % ExportToVTK ( sem % numberOfTimeSteps, sem % monitors % solution_file )
          end if
       END IF
+#if !defined(SPALARTALMARAS) && !defined(CAHNHILLIARD)
+      call timeIntegrator % massFlow % Close()
+      call timeIntegrator % massBalance % Close()
+#endif
       call Stopwatch % WriteSummaryFile(getFileName(controlVariables % stringValueForKey(solutionFileNameKey,LINE_LENGTH)))
 
 !

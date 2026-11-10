@@ -31,7 +31,12 @@ LIBOBJS_NS =    ./build_ns/TimeIntegratorDefinitions.o \
 		./build_ns/pAdaptationClass.o \
 		./build_ns/pAdaptationClassTE.o \
 		./build_ns/pAdaptationClassRL.o \
+		./build_ns/MassFlowBalanceController.o \
 		./build_ns/TimeIntegrator.o 
+
+./build_ns/TimeIntegrator.o: ./build_ns/MassFlowBalanceController.o $(INSTALL_DIR)/include_ns/massflowmonitormanager.mod
+./build_ns/MassFlowBalanceController.o: $(INSTALL_DIR)/include_ns/massflowmonitormanager.mod \
+        $(INSTALL_DIR)/include_ns/outflowbcclass.mod $(INSTALL_DIR)/include_ns/boundaryconditions.mod
 
 LIBOBJS_NSSA =    ./build_nssa/TimeIntegratorDefinitions.o \
 		./build_nssa/AnalyticalJacobian.o \

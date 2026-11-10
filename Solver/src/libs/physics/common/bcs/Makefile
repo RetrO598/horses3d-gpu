@@ -70,6 +70,12 @@ LIBOBJS_CAA = 	./build_caa/FluidData.o \
 		./build_caa/Physics.o  \
 		./build_caa/BoundaryConditions.o
 
+./build_ns/BoundaryConditions.o: ./build_ns/OutflowBC.o
+./build_nssa/BoundaryConditions.o: ./build_nssa/OutflowBC.o
+./build_ins/BoundaryConditions.o: ./build_ins/OutflowBC.o
+./build_ch/BoundaryConditions.o: ./build_ch/OutflowBC.o
+./build_mu/BoundaryConditions.o: ./build_mu/OutflowBC.o
+
 LIB = physics_bcs
 
 ############################################

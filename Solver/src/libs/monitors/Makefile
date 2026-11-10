@@ -20,6 +20,11 @@ LIBOBJS_NS = 	./build_ns/MonitorDefinitions.o \
 		./build_ns/VolumeMonitor.o \
 		./build_ns/LoadBalancingMonitor.o \
 		./build_ns/Monitors.o \
+		./build_ns/MassFlowHistory.o \
+		./build_ns/ADFStationarity.o \
+		./build_ns/FlowTransientDetector.o \
+		./build_ns/MassFlowAveraging.o \
+		./build_ns/MassFlowMonitorManager.o \
 		./build_ns/FWHDefinitions.o \
 		./build_ns/FWHObseverClass.o \
 		./build_ns/FWHGeneralClass.o
@@ -80,6 +85,24 @@ LIBOBJS_CAA = 	./build_caa/MonitorDefinitions.o \
 		./build_caa/Monitors.o
 
 LIB = monitors
+
+############################################
+#	FORTRAN MODULE DEPENDENCIES	   #
+############################################
+
+./build_ns/Monitors.o: ./build_ns/SurfaceMonitor.o
+./build_nssa/Monitors.o: ./build_nssa/SurfaceMonitor.o
+./build_ins/Monitors.o: ./build_ins/SurfaceMonitor.o
+./build_ch/Monitors.o: ./build_ch/SurfaceMonitor.o
+./build_mu/Monitors.o: ./build_mu/SurfaceMonitor.o
+./build_caa/Monitors.o: ./build_caa/SurfaceMonitor.o
+
+./build_ns/FlowTransientDetector.o: ./build_ns/ADFStationarity.o
+
+./build_ns/MassFlowMonitorManager.o: ./build_ns/Monitors.o \
+		./build_ns/MassFlowHistory.o \
+		./build_ns/FlowTransientDetector.o \
+		./build_ns/MassFlowAveraging.o
 
 ############################################
 #	MAIN COMPILATION RULES 		   #

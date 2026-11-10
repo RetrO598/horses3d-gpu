@@ -11,6 +11,10 @@
 
       USE SMConstants
       use FTValueDictionaryClass
+#if !defined(NAVIERSTOKES) || defined(SPALARTALMARAS) || defined(CAHNHILLIARD)
+      use ParamfileRegions, only: readValueInRegion
+      use FileReaders, only: controlFileName
+#endif
       USE PolynomialInterpAndDerivsModule
       USE DGSEMClass
       use HexMeshClass
@@ -23,6 +27,11 @@
       use MPI_Process_Info
       use TimeIntegratorDefinitions
       use MonitorsClass
+#if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS) && !defined(CAHNHILLIARD)
+      use MassFlowMonitorManager          , only: MassFlowManager_t
+      use MassFlowBalanceController       , only: MassFlowBalanceController_t
+      use FluidData                       , only: refValues
+#endif
       use ParticlesClass
       use Utilities                       , only: ToLower, AlmostEqual
       use FileReadingUtilities            , only: getFileName
@@ -53,6 +62,10 @@
          type(MultiTauEstim_t)                  :: TauEstimator
          character(len=LINE_LENGTH)             :: integration_method
          integer                                :: RKStep_key
+#if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS) && !defined(CAHNHILLIARD)
+         type(MassFlowManager_t)                :: massFlow
+         type(MassFlowBalanceController_t)      :: massBalance
+#endif
          PROCEDURE(TimeStep_FCN), NOPASS , POINTER :: RKStep
 !
 !        ========
@@ -64,6 +77,9 @@
          PROCEDURE :: integrate
          procedure :: Display    => TimeIntegrator_Display
          procedure :: CorrectDt  => TimeIntegrator_CorrectDt
+#if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS) && !defined(CAHNHILLIARD)
+         procedure :: SaveMassFlowState
+#endif
       END TYPE TimeIntegrator_t
 
       abstract interface
@@ -88,6 +104,49 @@
       CONTAINS
 !     ========
 !
+#if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS) && !defined(CAHNHILLIARD)
+      subroutine SaveMassFlowState(self, solution, iteration, time)
+         use, intrinsic :: iso_fortran_env, only: int64
+#ifdef _HAS_MPI_
+         use mpi, only: MPI_Abort, MPI_COMM_WORLD
+#endif
+         class(TimeIntegrator_t), intent(inout) :: self
+         character(len=*), intent(in) :: solution
+         integer, intent(in) :: iteration
+         real(kind=RP), intent(in) :: time
+         integer :: u, io
+         integer(int64) :: start
+
+         if (.not. MPI_Process%isRoot) return
+         if (.not. allocated(self%massFlow%boundaries)) return
+         if (.not. any(self%massFlow%boundaries%enabled)) return
+         ! SaveSolution has closed the field data. Both records share one footer.
+         open (newunit=u, file=trim(solution), status="old", access="stream", form="unformatted", &
+               position="append", action="readwrite", iostat=io)
+         call CheckIO("Cannot open solution for mass-flow state")
+         inquire (unit=u, pos=start)
+         call self%massFlow%Save(u, iteration, time)
+         call self%massBalance%Save(u)
+         write (u, iostat=io) start, 99
+         call CheckIO("Cannot seal mass-flow solution extension")
+         close (u, iostat=io)
+         call CheckIO("Cannot close mass-flow solution extension")
+      contains
+         subroutine CheckIO(message)
+            character(len=*), intent(in) :: message
+#ifdef _HAS_MPI_
+            integer :: ierr
+#endif
+            if (io == 0) return
+            print *, message
+#ifdef _HAS_MPI_
+            if (MPI_Process%doMPIAction) call MPI_Abort(MPI_COMM_WORLD, 99, ierr)
+#endif
+            error stop 99
+         end subroutine CheckIO
+      end subroutine SaveMassFlowState
+#endif
+
 !     ////////////////////////////////////////////////////////////////////////////////////////
 !
       SUBROUTINE constructTimeIntegrator(self,controlVariables, sem, initial_iter, initial_time)
@@ -102,6 +161,11 @@
          character(len=STRING_CONSTANT_LENGTH) :: keyword
          logical                               :: limit
          real(RP)                              :: limiter_minimum
+#if !defined(NAVIERSTOKES) || defined(SPALARTALMARAS) || defined(CAHNHILLIARD)
+         character(len=LINE_LENGTH)            :: balanceSwitch
+         logical                               :: balanceEnabled
+         integer                               :: balanceIO
+#endif
          integer                               :: adaptationType  ! 0 for Truncation Error and 1 for Reinforcement Learning (VI algorithm)
 !
 !        ----------------------------------------------------------------------------------
@@ -110,6 +174,14 @@
 !           If it is not, the keyword "dt" must be specified explicitly.
 !        ----------------------------------------------------------------------------------
 !
+#if !defined(NAVIERSTOKES) || defined(SPALARTALMARAS) || defined(CAHNHILLIARD)
+         call readValueInRegion(trim(controlFileName), "enabled", balanceSwitch, "#define mass flow balance", "#end")
+         if (len_trim(balanceSwitch) > 0) then
+            read(balanceSwitch,*,iostat=balanceIO) balanceEnabled
+            if (balanceIO /= 0) error stop "Invalid mass flow balance enabled switch"
+            if (balanceEnabled) error stop "Mass-flow balance currently supports compressible NS without SA only"
+         end if
+#endif
          IF (controlVariables % containsKey("cfl")) THEN
 #ifdef FLOW
             self % Compute_dt = .TRUE.
@@ -251,6 +323,13 @@
          call surfacesMesh % autosaveConfig (controlVariables, initial_time)      ! If not requested, the procedure returns only setting not save values
 
          call self % TauEstimator % construct(controlVariables, sem)
+
+#if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS) && !defined(CAHNHILLIARD)
+         call self % massFlow % Construct(controlVariables, sem % monitors, sem % mesh, Lref / refValues % V, &
+                                         refValues % rho * refValues % V * Lref**2, initial_iter, initial_time)
+         call self % massBalance % Construct(controlVariables, sem % mesh, self % massFlow, initial_iter, initial_time, &
+                                              sem % monitors % solution_file)
+#endif
 
          if (.not. MPI_Process % isRoot ) return
 
@@ -394,6 +473,9 @@
 !     Finish time integration
 !     -----------------------
       call IntegrateInTime( self, sem, controlVariables, monitors, ComputeTimeDerivative, ComputeTimeDerivativeIsolated )
+#if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS) && !defined(CAHNHILLIARD)
+      call self % massBalance % Finish()
+#endif
 
 !     Measure solver time
 !     -------------------
@@ -545,6 +627,10 @@
       maxResidual       = ComputeMaxResiduals(sem % mesh)
       sem % maxResidual = maxval(maxResidual)
       call Monitors % UpdateValues( sem % mesh, t, sem % numberOfTimeSteps, maxResidual, .false., dt )
+#if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS) && !defined(CAHNHILLIARD)
+      call self % massFlow % Observe(monitors, sem % numberOfTimeSteps, t)
+      call self % massBalance % AfterStep(self % massFlow, sem % numberOfTimeSteps, t)
+#endif
       call self % Display(sem % mesh, monitors, sem  % numberOfTimeSteps)
 
       if (self % pAdaptator % adaptation_mode    == ADAPT_DYNAMIC_TIME .and. &
@@ -555,6 +641,9 @@
 
       call Stopwatch % Pause("Solver") ! We dont want to measure the time of the statistics dump
       call monitors % WriteToFile(sem % mesh)
+#if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS) && !defined(CAHNHILLIARD)
+      call self % massFlow % WriteToFile()
+#endif
       call Stopwatch % Pause("Solver") ! We dont want to measure the time of the statistics dump
 
       IF (self % integratorType == STEADY_STATE) THEN
@@ -563,6 +652,9 @@
                write(STD_OUT,'(/,A,I0,A,ES10.3)') "   *** Residual tolerance reached at iteration ",sem % numberOfTimeSteps," with Residual = ", maxval(maxResidual)
             end if
             call monitors % WriteToFile(sem % mesh, force = .TRUE.)
+#if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS) && !defined(CAHNHILLIARD)
+            call self % massFlow % WriteToFile(force=.true.)
+#endif
 #if defined(NAVIERSTOKES) && (!(SPALARTALMARAS))
             call sem % fwh % writeToFile( force = .TRUE. )
 #endif
@@ -727,6 +819,10 @@
 !        Update monitors
 !        ---------------
          call Monitors % UpdateValues( sem % mesh, t, k+1, maxResidual, self% autosave% Autosave(k+1), dt )
+#if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS) && !defined(CAHNHILLIARD)
+         call self % massFlow % Observe(monitors, k+1, t)
+         call self % massBalance % AfterStep(self % massFlow, k+1, t)
+#endif
 !
 !        Exit if the target is reached
 !        -----------------------------
@@ -787,6 +883,13 @@
          if ( self % autosave % Autosave(k+1) ) then
             call Stopwatch % Pause("Solver") ! We dont want to measure the time of the statistics dump
             call SaveRestart(sem,k+1,t,SolutionFileName, saveGradients, saveSensor, saveLES)
+#if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS) && !defined(CAHNHILLIARD)
+            block
+               character(len=LINE_LENGTH) :: flow_snapshot
+               write(flow_snapshot,'(A,A,I10.10,A)') trim(SolutionFileName),'_',k+1,'.hsol'
+               call self % SaveMassFlowState(trim(flow_snapshot), k+1, t)
+            end block
+#endif
             call Stopwatch % Start("Solver") ! We dont want to measure the time of the statistics dump
 #if defined(NAVIERSTOKES)
             if ( sem % particles % active ) then
@@ -813,6 +916,9 @@
 !        --------------
          call Stopwatch % Pause("Solver") ! We dont want to measure the time of the statistics dump
          call monitors % WriteToFile(sem % mesh)
+#if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS) && !defined(CAHNHILLIARD)
+         call self % massFlow % WriteToFile()
+#endif
          call Stopwatch % Start("Solver") ! We dont want to measure the time of the statistics dump
 
          sem % numberOfTimeSteps = k + 1
@@ -823,6 +929,9 @@
       if ( k .ne. 0 ) then
          call Stopwatch % Pause("Solver") ! We dont want to measure the time of the statistics dump
          call Monitors % writeToFile(sem % mesh, force = .true. )
+#if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS) && !defined(CAHNHILLIARD)
+         call self % massFlow % WriteToFile(force=.true.)
+#endif
          call Stopwatch % Start("Solver") ! We dont want to measure the time of the statistics dump
          
 #if defined(NAVIERSTOKES) && (!(SPALARTALMARAS))

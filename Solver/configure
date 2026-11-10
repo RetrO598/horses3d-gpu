@@ -37,6 +37,7 @@ TEST_CASES="./Euler/BoxAroundCircle \
             ./Euler/BoxAroundCirclePirozzoli \
             ./Euler/Diffuser \
             ./Euler/InviscidBump \
+            ./Euler/CDVNozzle \
             ./Euler/T106A \
             ./Euler/UniformFlow \
             ./Euler/JFNK \
