@@ -621,6 +621,9 @@
 !     Check initial residuals
 !     -----------------------
 !
+#if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS) && !defined(CAHNHILLIARD)
+      call self % massBalance % UpdateTemperature(sem % mesh)
+#endif
       if( sem % mesh % IBM % active ) call sem % mesh % IBM % SemiImplicitCorrection( sem % mesh % elements, dt )     
       call ComputeTimeDerivative(sem % mesh, sem % particles, t, CTD_IGNORE_MODE)
       if( sem % mesh % IBM % active ) call sem % mesh % IBM % SemiImplicitCorrection( sem % mesh % elements, dt )
@@ -629,7 +632,7 @@
       call Monitors % UpdateValues( sem % mesh, t, sem % numberOfTimeSteps, maxResidual, .false., dt )
 #if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS) && !defined(CAHNHILLIARD)
       call self % massFlow % Observe(monitors, sem % numberOfTimeSteps, t)
-      call self % massBalance % AfterStep(self % massFlow, sem % numberOfTimeSteps, t)
+      call self % massBalance % AfterStep(self % massFlow, sem % mesh, sem % numberOfTimeSteps, t)
 #endif
       call self % Display(sem % mesh, monitors, sem  % numberOfTimeSteps)
 
@@ -821,7 +824,7 @@
          call Monitors % UpdateValues( sem % mesh, t, k+1, maxResidual, self% autosave% Autosave(k+1), dt )
 #if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS) && !defined(CAHNHILLIARD)
          call self % massFlow % Observe(monitors, k+1, t)
-         call self % massBalance % AfterStep(self % massFlow, k+1, t)
+         call self % massBalance % AfterStep(self % massFlow, sem % mesh, k+1, t)
 #endif
 !
 !        Exit if the target is reached

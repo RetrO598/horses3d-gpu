@@ -22,6 +22,9 @@ LIBOBJS_NS =  ./build_ns/GenericBoundaryConditionClass.o \
 		./build_ns/WallFunctionConnectivity.o \
 		./build_ns/BoundaryConditions.o
 
+./build_ns/BoundaryConditions.o: ./build_ns/TotalInflowBC.o
+./build_nssa/BoundaryConditions.o: ./build_nssa/TotalInflowBC.o
+
 LIBOBJS_NSSA = 	./build_nssa/GenericBoundaryConditionClass.o \
 		./build_nssa/InflowBC.o \
 		./build_nssa/TotalInflowBC.o \

@@ -4,6 +4,9 @@ module SurfaceIntegrals
    use SMConstants
    use PhysicsStorage
    use Physics
+#ifdef NAVIERSTOKES
+   use FluidData, only: dimensionless, thermodynamics, refValues
+#endif
    use FaceClass
    use ElementClass
    use HexMeshClass
@@ -17,6 +20,9 @@ module SurfaceIntegrals
    private
    public   SURFACE, TOTAL_FORCE, PRESSURE_FORCE, VISCOUS_FORCE, MASS_FLOW, FLOW_RATE, PRESSURE_DISTRIBUTION
    public   ScalarSurfaceIntegral, VectorSurfaceIntegral, ScalarDataReconstruction, VectorDataReconstruction
+#ifdef NAVIERSTOKES
+   public   TotalTemperatureSurfaceMoments
+#endif
 
    integer, parameter   :: SURFACE = 1
    integer, parameter   :: TOTAL_FORCE = 2
@@ -30,6 +36,75 @@ module SurfaceIntegrals
 !
 !  ========
    contains
+#ifdef NAVIERSTOKES
+      subroutine TotalTemperatureSurfaceMoments(mesh, zones, direction, moments)
+         ! Dimensionalize flow at the caller. The second moment is flux*Tt (K).
+         ! direction=+1 for extraction, -1 for injection. Preserve signed flux;
+         ! report reverse flux separately rather than hiding it with abs().
+         class(HexMesh), intent(inout) :: mesh
+         integer, intent(in) :: zones(:), direction
+         real(kind=RP), intent(out) :: moments(4)
+         integer :: z, k, fID, zoneID
+         real(kind=RP) :: mass, thermal, reverse, bad, face_moments(4)
+#ifdef _HAS_MPI_
+         integer :: ierr
+         real(kind=RP) :: local(4)
+#endif
+         moments = 0
+         do z = 1, size(zones)
+            zoneID = zones(z)
+            call ProlongToFaces(mesh, zoneID)
+            mass = 0; thermal = 0; reverse = 0; bad = 0
+            !$acc parallel loop gang present(mesh) private(fID,face_moments) reduction(+:mass,thermal,reverse,bad)
+            do k = 1, mesh%zones(zoneID)%no_of_faces
+               fID = mesh%zones(zoneID)%faces(k)
+               face_moments = TotalTemperatureFaceMoments(mesh%faces(fID), direction)
+               mass = mass + face_moments(1)
+               thermal = thermal + face_moments(2)
+               reverse = reverse + face_moments(3)
+               bad = bad + face_moments(4)
+            end do
+            !$acc end parallel loop
+            moments = moments + [mass, thermal, reverse, bad]
+         end do
+#ifdef _HAS_MPI_
+         local = moments
+         call MPI_Allreduce(local, moments, 4, MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, ierr)
+#endif
+      end subroutine TotalTemperatureSurfaceMoments
+
+      function TotalTemperatureFaceMoments(f, direction) result(moments)
+         !$acc routine vector
+         class(Face), intent(in) :: f
+         integer, intent(in) :: direction
+         real(kind=RP) :: moments(4)
+         real(kind=RP) :: mass, thermal, reverse, bad, rho, p, v2, flux, tt, weight
+         integer :: i, j
+         mass = 0; thermal = 0; reverse = 0; bad = 0
+         !$acc loop vector collapse(2) private(rho,p,v2,flux,tt,weight) reduction(+:mass,thermal,reverse,bad)
+         do j = 0, f%Nf(2); do i = 0, f%Nf(1)
+            rho = f%storage(1)%Q(IRHO,i,j)
+            if (rho <= 0) then
+               bad = bad + 1
+               cycle
+            end if
+            v2 = sum(f%storage(1)%Q(IRHOU:IRHOW,i,j)**2)/rho**2
+            p = thermodynamics%gammaMinus1*(f%storage(1)%Q(IRHOE,i,j) - 0.5_RP*rho*v2)
+            if (p <= 0) then
+               bad = bad + 1
+               cycle
+            end if
+            tt = dimensionless%gammaM2*(p/rho + &
+                 0.5_RP*thermodynamics%gammaMinus1/thermodynamics%gamma*v2)*refValues%T
+            flux = direction*dot_product(f%storage(1)%Q(IRHOU:IRHOW,i,j), f%geom%normal(:,i,j))
+            weight = NodalStorage(f%Nf(1))%w(i)*NodalStorage(f%Nf(2))%w(j)*f%geom%jacobian(i,j)
+            mass = mass + weight*flux
+            thermal = thermal + weight*flux*tt
+            reverse = reverse + weight*max(-flux, 0.0_RP)
+         end do; end do
+         moments = [mass, thermal, reverse, bad]
+      end function TotalTemperatureFaceMoments
+#endif
 !  ========
 !
 !////////////////////////////////////////////////////////////////////////////////////////

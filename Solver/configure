@@ -38,6 +38,9 @@ TEST_CASES="./Euler/BoxAroundCircle \
             ./Euler/Diffuser \
             ./Euler/InviscidBump \
             ./Euler/CDVNozzle \
+            ./Euler/CDVFan \
+            ./Euler/CDVGapNoWork \
+            ./Euler/CDVNoGapReference \
             ./Euler/T106A \
             ./Euler/UniformFlow \
             ./Euler/JFNK \
@@ -100,6 +103,7 @@ TEST_CASES="./Euler/BoxAroundCircle \
             ./NavierStokes/Cylinder_AdaptiveTimeStep_pAdaptationRL \
             ./NavierStokes/ABLBoundaryMapping \
             ./NavierStokes/ActuatorLineController \
+            ./NavierStokes/Wind_Turbine_Empty_Disk \
             ./NavierStokes/Channel \
             ./NavierStokes/Channel64 \
             ./IncompressibleNS/Convergence \

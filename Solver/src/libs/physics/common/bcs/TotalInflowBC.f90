@@ -43,6 +43,8 @@ module TotalInflowBCClass
          procedure         :: FlowNeumann       => TotalInflowBC_FlowNeumann
          procedure         :: CreateDeviceData  => TotalInflowBC_CreateDeviceData
          procedure         :: ExitDeviceData    => TotalInflowBC_ExitDeviceData
+         procedure         :: GetTotalTemperatureK => TotalInflowBC_GetTotalTemperatureK
+         procedure         :: SetTotalTemperatureK => TotalInflowBC_SetTotalTemperatureK
    end type TotalInflowBC_t
 !
 !  *******************************************************************
@@ -231,6 +233,33 @@ module TotalInflowBCClass
 !
 !////////////////////////////////////////////////////////////////////////////
 !
+      function TotalInflowBC_GetTotalTemperatureK(self) result(temperature)
+         class(TotalInflowBC_t), intent(in) :: self
+         real(kind=RP) :: temperature
+         temperature = self%T0 * refValues%T
+      end function TotalInflowBC_GetTotalTemperatureK
+
+      subroutine TotalInflowBC_SetTotalTemperatureK(self, temperature, status)
+         use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+         class(TotalInflowBC_t), intent(inout) :: self
+         real(kind=RP), intent(in) :: temperature
+         integer, intent(out) :: status
+         real(kind=RP) :: value
+         status = 1
+         if (.not. ieee_is_finite(temperature)) return
+         if (temperature <= 0) return
+         if (.not. ieee_is_finite(refValues%T)) return
+         if (refValues%T <= 0) return
+         value = temperature / refValues%T
+         if (.not. ieee_is_finite(value)) return
+         if (value <= 0) return
+         ! Same safe complete-step update contract as the outflow pressure setter.
+         !$acc wait
+         self%T0 = value
+         !$acc update device(self%T0)
+         status = 0
+      end subroutine TotalInflowBC_SetTotalTemperatureK
+
       subroutine TotalInflowBC_FlowState(self, mesh, zone)
          implicit none
          class(TotalInflowBC_t), intent(in) :: self

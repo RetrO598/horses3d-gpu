@@ -1,0 +1,111 @@
+! Continuous CDV nozzle reference for CDVGapNoWork: no internal cut planes.
+! Same external total inlet/static outlet, initialization and numerical settings.
+! Fixed outlet pressure; mass-flow feedback is disabled.
+! Upper half-domain P2 mesh in metres; symmetry plane at y = 0.
+! Euler equations through NS with Reynolds number = 0 (zero viscosity).
+Flow equations                   = NS
+mesh file name                   = MESH/cdv_planar_half_p2.msh
+reference length (m)             = 1.0
+Polynomial order i               = 2
+Polynomial order j               = 2
+Polynomial order k               = 1
+Discretization nodes             = Gauss-Lobatto
+
+! Isentropic exit reference state; reference Mach does not fix inlet Mach.
+mach number                      = 0.1701307342730733
+Reynolds number                  = 0.0
+Prandtl number                   = 0.72
+reference temperature (k)        = 55.235801392257024
+reference pressure (pa)          = 6756.86214730464
+AOA theta                        = 0.0
+AOA phi                          = 0.0
+gravity direction                = [0.0,0.0,0.0]
+LES model                        = none
+enable shock-capturing           = .false.
+
+inviscid discretization          = standard
+riemann solver                   = roe
+compute gradients               = .true.
+gradient variables              = state
+viscous discretization           = BR1
+simulation type                  = time-accurate
+time integration                 = explicit
+explicit method                  = rk3
+compute time derivative after timestep = .true.
+Number of time steps             = 100000
+Convergence tolerance            = 1.d-10
+cfl                              = 0.75
+dcfl                             = 1e6
+
+Output Interval                  = 100
+monitors flush interval          = 100
+Number of plot points            = 4
+solution file name               = RESULTS/CDVNoGapReference.hsol
+! Save a separate solution snapshot every 10000 iterations.
+autosave mode                    = iteration
+autosave interval                = 10000
+save gradients with solution     = .false.
+restart                          = .false.
+restart file name                = RESULTS/CDVNoGapReference.hsol
+mesh partitioning                = SFC
+
+! NASA plenum: p0 = 1 psi, T0 = 100 degrees Rankine (absolute).
+#define boundary inlet
+   mass flow statistics = .false.
+   type = totalinflow
+   total pressure = 6894.757293168
+   total temperature = 55.55555555555556
+   aoatheta = 0.0
+   aoaphi = 0.0
+#end
+
+#define boundary outlet
+   mass flow statistics = .false.
+   type = Outflow
+   pressure = 6756.86214730464
+#end
+
+#define boundary wall_upper
+   mass flow statistics = .false.
+   type = FreeSlipWall
+#end
+
+#define boundary symmetry
+   mass flow statistics = .false.
+   ! Euler symmetry: reflect normal momentum, preserve tangential state.
+   type = FreeSlipWall
+#end
+
+#define boundary z_min
+   mass flow statistics = .false.
+   type = FreeSlipWall
+#end
+
+#define boundary z_max
+   mass flow statistics = .false.
+   type = FreeSlipWall
+#end
+
+! Interior-state outward mass flux: negative inlet, positive outlet.
+#define surface monitor 1
+   Name = inlet-mass-flow
+   Marker = inlet
+   Variable = mass-flow
+#end
+
+#define surface monitor 2
+   Name = outlet-mass-flow
+   Marker = outlet
+   Variable = mass-flow
+#end
+
+! Symmetry-plane state-flux diagnostic; leakage should be negligible.
+#define surface monitor 3
+   Name = symmetry-mass-flow
+   Marker = symmetry
+   Variable = mass-flow
+#end
+
+#define mass flow balance
+   enabled = .false.
+#end

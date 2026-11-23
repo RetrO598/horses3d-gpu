@@ -1,0 +1,144 @@
+! NTNU wind tunnel, disk pressures from area averages in adA_g2p2_0000215483.hsol.
+! Prescribed static pressure drop (upstream minus downstream) = 10.171405 Pa.
+Flow equations                  = NS
+mesh file name                  = MESH/Wind_turbine_disk_empty_cgns_g2_mesh.h5
+mach number                     = 0.02934
+Reynolds number                 = 666666.67
+AOA theta                       = 0.0
+AOA phi                         = 0.0
+
+Polynomial order                = 2
+riemann solver                  = lax-friedrichs
+LES model                       = Vreman
+
+simulation type                 = time-accurate
+Number of time steps            = 100000000
+final time                      = 30.0
+Convergence tolerance           = 1.0e-13
+cfl                             = 0.5
+dcfl                            = 0.5
+
+Output Interval                 = 2000
+autosave mode                   = time
+autosave interval               = 3.0
+solution file name              = RESULTS/wind_turbine_empty_disk_pressure_drop.hsol
+save gradients with solution    = .false.
+restart                         = .false.
+restart file name               = RESULTS/wind_turbine_empty_disk_pressure_drop.hsol
+
+! Tunnel inlet and outlet use the freestream defaults.
+#define boundary inlet
+   type = Inflow
+#end
+
+#define boundary outlet
+   type = Outflow
+#end
+
+! At x = 3.635 m the flow leaves the CFD domain through the disk.
+#define boundary disk_upstream
+   type = Outflow
+   pressure = 101334.287681
+#end
+
+! At x = 3.685 m the flow enters the CFD domain again along +x.
+#define boundary disk_downstream
+   type = Inflow
+   pressure = 101324.116276
+   ! Compensate for the change in sound speed to retain the reference velocity.
+   mach = 0.02934012794784982
+#end
+
+! The paired rotor_cylinder faces are internal.
+#define boundary rotor_cylinder__disk_side
+   type = FreeSlipWall
+#end
+
+#define boundary sidea__sideb__top__bottom
+   type = FreeSlipWall
+#end
+
+#define statistics
+   sampling interval = 10
+   starting time     = 20.0
+   dump interval     = 50000
+#end
+
+! Wake probes referenced to the disk center at x = 3.660 m.
+#define probe 1
+   Name = u_xD1_axis
+   Position = [4.5540,1.3550,0.8170]
+   Variable = u
+#end
+
+#define probe 2
+   Name = u_xD1_r08
+   Position = [4.5540,1.7126,0.8170]
+   Variable = u
+#end
+
+#define probe 3
+   Name = u_xD3_axis
+   Position = [6.3420,1.3550,0.8170]
+   Variable = u
+#end
+
+#define probe 4
+   Name = u_xD3_r08
+   Position = [6.3420,1.7126,0.8170]
+   Variable = u
+#end
+
+#define probe 5
+   Name = u_xD5_axis
+   Position = [8.1300,1.3550,0.8170]
+   Variable = u
+#end
+
+#define probe 6
+   Name = u_xD5_r08
+   Position = [8.1300,1.7126,0.8170]
+   Variable = u
+#end
+
+#define surface monitor 1
+   name = tunnel-inlet-mass-flow
+   marker = inlet
+   variable = mass-flow
+#end
+
+#define surface monitor 2
+   name = tunnel-outlet-mass-flow
+   marker = outlet
+   variable = mass-flow
+#end
+
+#define surface monitor 3
+   name = disk-upstream-mass-flow
+   marker = disk_upstream
+   variable = mass-flow
+#end
+
+#define surface monitor 4
+   name = disk-downstream-mass-flow
+   marker = disk_downstream
+   variable = mass-flow
+#end
+
+#define surface monitor 5
+   name = disk-side-mass-flow
+   marker = disk_side
+   variable = mass-flow
+#end
+
+#define surface monitor 6
+   name = disk-upstream-pressure
+   marker = disk_upstream
+   variable = pressure-average
+#end
+
+#define surface monitor 7
+   name = disk-downstream-pressure
+   marker = disk_downstream
+   variable = pressure-average
+#end

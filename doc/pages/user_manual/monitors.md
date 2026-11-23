@@ -257,3 +257,62 @@ the pressure configured in the control file. The current record format is requir
 for resume; previous controller checkpoint formats are not supported.
 Pressure changes do not overwrite solver residuals. Enabling balance does not
 disable p-adaptation, FMG initialization or IBM.
+
+### Complete-step total-temperature matching
+
+An optional temperature feedback runs alongside the existing pressure controller:
+
+```text
+#define mass flow balance
+   enabled = .true.
+   ! Existing mass-flow/pressure settings remain required.
+   match total temperature = .true.
+   temperature source boundaries = fan_inlet
+   temperature target boundaries = fan_outlet
+   ! ... existing observed/controlled boundaries, pressure bounds, tolerances ...
+#end
+```
+
+The default is disabled, preserving the original pressure-only behavior. Source
+names must be controlled outflow boundaries; target names must be observed
+`totalinflow` boundaries. Both lists are explicit to avoid changing an unrelated
+external inlet. Multiple source patches form one aggregate mass-weighted total
+temperature, and all listed targets receive that same prescribed value.
+
+For calorically perfect air, the extracted interior state supplies
+`Tt = T + |velocity|^2/(2*cp)`. The controller integrates signed outward mass flux
+and mass-flux-times-Tt over all source faces, including geometry Jacobians and
+quadrature weights, then takes their ratio. MPI sums moments before the ratio;
+it does not average rank-local temperatures.
+
+The initial field is sampled before the first residual evaluation. Thereafter,
+every accepted complete step refreshes face states from the current solution,
+samples the source group and updates only the target BC total temperature in kelvin.
+Host and OpenACC data are synchronized before subsequent boundary evaluations.
+Total pressure and flow direction stay as configured. Updates remain active
+after the pressure controller enters `balanced`; no additional ADF gate or
+temperature smoothing delays them. The pressure detector/averaging logic is
+unchanged and observes the resulting thermally coupled flow response.
+
+Zero/negative net throughflow (using `flow floor (kg/s)`) or reverse source flux
+exceeding 1e-8 of net extraction holds the last valid prescribed temperature.
+The existing inlet BC value is retained directly, without a duplicate controller
+temperature state. Nonfinite source moments, nonpositive source density/pressure
+or a nonpositive temperature are errors. No per-step temperature log is written.
+
+This is an explicit complete-step mean-temperature boundary coupling, not a
+pointwise interface constraint or an implicit simultaneous energy solve. The
+target's current interior field can differ from its newly prescribed value, and
+an update is used by the next full step. Unequal mass flows, nonuniform profiles
+and numerical fluxes can still yield an energy-flux mismatch. Equal prescribed
+total temperature alone does not prove exact discrete energy conservation.
+
+Controller checkpoint record version 2 additionally stores the temperature mode,
+source/target names and the applied temperature read directly from the inlet BC.
+Resume validates this mapping and restores the temperature before the first
+residual evaluation. Version-1
+pressure-only records remain readable with matching disabled. Enabling matching
+on a version-1 record, or changing temperature mode/mapping on resume, requires
+`restart policy = reset`; old pressure-response history is then discarded because
+the boundary feedback problem has changed. Detector history is managed separately
+by each boundary's existing restart policy.

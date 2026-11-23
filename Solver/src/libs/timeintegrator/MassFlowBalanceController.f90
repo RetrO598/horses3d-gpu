@@ -9,6 +9,10 @@ module MassFlowBalanceController
    use HexMeshClass, only: HexMesh
    use BoundaryConditions, only: BCs
    use OutflowBCClass, only: OutflowBC_t
+   use TotalInflowBCClass, only: TotalInflowBC_t
+   use SurfaceIntegrals, only: TotalTemperatureSurfaceMoments
+   use PhysicsStorage, only: Lref
+   use FluidData, only: refValues
    use MassFlowMonitorManager, only: MassFlowManager_t, MassFlowStatistics_t, GetSolutionExtensionBounds
    use MPI_Process_Info, only: MPI_Process
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
@@ -23,11 +27,14 @@ module MassFlowBalanceController
    integer, parameter :: OFF = 0, WAIT_STABLE = 1, COLLECT_MEAN = 2, CONFIRM = 3, BALANCED = 4, ENDED = 5
    integer, parameter :: NO_ACTION = 0, START_MEAN = 1, UPDATE_PRESSURE = 2
    character(len=16), parameter :: RECORD_TAG = "MASSFLOW-CONTROL"
-   integer, parameter :: RECORD_VERSION = 1
+   integer, parameter :: RECORD_VERSION = 2
    character(len=*), parameter :: REGION = "#define mass flow balance"
 
    type MassFlowBalanceController_t
       logical :: enabled = .false.
+      logical :: match_temperature = .false.
+      integer, allocatable :: temperature_sources(:), temperature_targets(:), temperature_target_zones(:)
+      character(len=LINE_LENGTH), allocatable :: temperature_source_names(:), temperature_target_names(:)
       integer :: state = OFF, epoch = 0, evaluations = 0, phase_start = 0
       integer :: minimum_steps = 50
       integer :: log_unit = 0, last_block = 0
@@ -48,6 +55,7 @@ module MassFlowBalanceController
       procedure :: Finish => BalanceFinish
       procedure :: Save => BalanceSave
       procedure :: Close => BalanceClose
+      procedure :: UpdateTemperature => BalanceUpdateTemperature
    end type MassFlowBalanceController_t
 
 
@@ -69,7 +77,8 @@ contains
                                                  "minimum pressure (pa)", "maximum pressure (pa)", "probe pressure step (pa)", &
                                                  "maximum pressure step (pa)", "relaxation", "relative mass tolerance", &
                                             "absolute mass tolerance (kg/s)", "mean error fraction", "average block duration (s)", &
-                                                 "minimum settle steps"]
+                                                 "minimum settle steps", "match total temperature", &
+                                                 "temperature source boundaries", "temperature target boundaries"]
       integer, allocatable :: observed(:)
       integer :: j, io, bc_id
       logical :: has_inlet, has_outlet
@@ -201,6 +210,46 @@ contains
 #endif
          if (global_area <= 0) call Fatal("Observed boundary has no global faces")
       end do
+      if (options%containsKey("match total temperature")) then
+         value = options%stringValueForKey("match total temperature", LINE_LENGTH)
+         read(value, *, iostat=io) self%match_temperature
+         if (io /= 0) call Fatal("Invalid match total temperature switch")
+      end if
+      if (self%match_temperature) then
+         if (.not. options%containsKey("temperature source boundaries") .or. &
+             .not. options%containsKey("temperature target boundaries")) &
+            call Fatal("Temperature matching requires explicit source and target boundaries")
+         names = options%stringValueForKey("temperature source boundaries", LINE_LENGTH)
+         call ResolveZones(mesh, names, self%temperature_sources)
+         names = options%stringValueForKey("temperature target boundaries", LINE_LENGTH)
+         call ResolveZones(mesh, names, self%temperature_target_zones)
+         allocate(self%temperature_source_names(size(self%temperature_sources)), &
+                  self%temperature_target_names(size(self%temperature_target_zones)), &
+                  self%temperature_targets(size(self%temperature_target_zones)))
+         do j = 1, size(self%temperature_sources)
+            bc_id = BoundaryId(mesh, self%temperature_sources(j))
+            if (trim(BCs(bc_id)%bc%BCType) /= "outflow") call Fatal("Temperature source must be outflow")
+            if (.not. any(self%controlled == self%temperature_sources(j))) &
+               call Fatal("Temperature source must be a controlled outlet")
+            self%temperature_source_names(j) = mesh%zones(self%temperature_sources(j))%name
+         end do
+         do j = 1, size(self%temperature_target_zones)
+            if (.not. any(observed == self%temperature_target_zones(j))) &
+               call Fatal("Temperature target must be an observed inlet")
+            bc_id = BoundaryId(mesh, self%temperature_target_zones(j))
+            select type (bc => BCs(bc_id)%bc)
+            type is (TotalInflowBC_t)
+               ! Validated here; T0 remains owned by the inlet BC.
+            class default
+               call Fatal("Temperature target must be totalinflow")
+            end select
+            self%temperature_targets(j) = bc_id
+            self%temperature_target_names(j) = mesh%zones(self%temperature_target_zones(j))%name
+         end do
+      else if (options%containsKey("temperature source boundaries") .or. &
+               options%containsKey("temperature target boundaries")) then
+         call Fatal("Temperature boundary lists require match total temperature = .true.")
+      end if
       ! Store BC IDs after name resolution; monitor zone IDs remain separate.
       do j = 1, size(self%controlled)
          self%controlled(j) = BoundaryId(mesh, self%controlled(j))
@@ -282,9 +331,10 @@ contains
       if (id == 0) call Fatal("Boundary has no BC object")
    end function BoundaryId
 
-   subroutine BalanceAfterStep(self, massFlow, iteration, time)
+   subroutine BalanceAfterStep(self, massFlow, mesh, iteration, time)
       class(MassFlowBalanceController_t), intent(inout) :: self
       type(MassFlowManager_t), intent(inout) :: massFlow
+      class(HexMesh), intent(inout) :: mesh
       integer, intent(in) :: iteration
       real(kind=RP), intent(in) :: time
       integer :: action
@@ -294,6 +344,7 @@ contains
       integer :: ierr, packet(3)
 #endif
       if (.not. self%enabled) return
+      call self%UpdateTemperature(mesh)
       if (self%state == BALANCED .or. self%state == ENDED) return
       action = NO_ACTION
       if (MPI_Process%isRoot) then
@@ -367,6 +418,38 @@ contains
          call massFlow%Reset(self%monitored, iteration, time)
       end select
    end subroutine BalanceAfterStep
+
+   subroutine ApplyTemperature(self, temperature)
+      class(MassFlowBalanceController_t), intent(in) :: self
+      real(kind=RP), intent(in) :: temperature
+      integer :: j, status
+      do j = 1, size(self%temperature_targets)
+         select type (bc => BCs(self%temperature_targets(j))%bc)
+         type is (TotalInflowBC_t)
+            call bc%SetTotalTemperatureK(temperature, status)
+            if (status /= 0) call Fatal("Total-temperature setter rejected update")
+         end select
+      end do
+   end subroutine ApplyTemperature
+
+   subroutine BalanceUpdateTemperature(self, mesh)
+      class(MassFlowBalanceController_t), intent(in) :: self
+      class(HexMesh), intent(inout) :: mesh
+      real(kind=RP) :: source(4), scale, temperature
+      if (.not. self%enabled .or. .not. self%match_temperature) return
+      ! Sample the accepted complete-step Q rather than stale RK face buffers.
+      call TotalTemperatureSurfaceMoments(mesh, self%temperature_sources, 1, source)
+      if (.not. all(ieee_is_finite(source))) call Fatal("Nonfinite total-temperature moments")
+      if (source(4) /= 0) call Fatal("Nonphysical state in total-temperature detection")
+      scale = refValues%rho*refValues%V*Lref**2
+      ! Invalid throughflow leaves each inlet's existing T0 unchanged.
+      if (source(1)*scale <= self%flow_floor) return
+      if (source(3) > 1e-8_RP*source(1)) return
+      temperature = source(2)/source(1)
+      if (.not. ieee_is_finite(temperature)) call Fatal("Invalid extracted total temperature")
+      if (temperature <= 0) call Fatal("Nonpositive extracted total temperature")
+      call ApplyTemperature(self, temperature)
+   end subroutine BalanceUpdateTemperature
 
    subroutine EnsureCapacity(self, needed)
       class(MassFlowBalanceController_t), intent(inout) :: self
@@ -613,14 +696,28 @@ contains
    subroutine BalanceSave(self, u)
       class(MassFlowBalanceController_t), intent(in) :: self
       integer, intent(in) :: u
-      integer :: io
+      integer :: io, temperature_switch
+      real(kind=RP) :: temperature
       integer(int64) :: position, bytes, record_end
       if (.not. self%enabled) return
+      temperature_switch = merge(1, 0, self%match_temperature)
+      if (self%match_temperature) then
+         select type (bc => BCs(self%temperature_targets(1))%bc)
+         type is (TotalInflowBC_t)
+            temperature = bc%GetTotalTemperatureK()
+         class default
+            call Fatal("Temperature target must be totalinflow")
+         end select
+      end if
       inquire (unit=u, pos=position)
       inquire (iolength=bytes) RECORD_TAG, RECORD_VERSION, record_end, self%constraint, self%target, &
          self%coefficients, self%pressure, self%flow_scale, self%epoch, self%evaluations, &
-         self%pressures(:self%evaluations), self%residuals(:self%evaluations)
+         self%pressures(:self%evaluations), self%residuals(:self%evaluations), temperature_switch
       record_end = position + bytes + NamesBytes(self%observed_names) + NamesBytes(self%controlled_names)
+      if (self%match_temperature) then
+         inquire(iolength=bytes) temperature
+         record_end = record_end + bytes + NamesBytes(self%temperature_source_names) + NamesBytes(self%temperature_target_names)
+      end if
       write (u, iostat=io) RECORD_TAG, RECORD_VERSION, record_end, self%constraint, self%target
       if (io /= 0) call Fatal("Cannot save embedded control header")
       call WriteNames(u, self%observed_names)
@@ -628,6 +725,14 @@ contains
       write (u, iostat=io) self%coefficients, self%pressure, self%flow_scale, self%epoch, self%evaluations, &
          self%pressures(:self%evaluations), self%residuals(:self%evaluations)
       if (io /= 0) call Fatal("Cannot save embedded control history")
+      write(u, iostat=io) temperature_switch
+      if (io /= 0) call Fatal("Cannot save total-temperature control switch")
+      if (self%match_temperature) then
+         call WriteNames(u, self%temperature_source_names)
+         call WriteNames(u, self%temperature_target_names)
+         write(u, iostat=io) temperature
+         if (io /= 0) call Fatal("Cannot save applied total temperature")
+      end if
    end subroutine BalanceSave
 
    subroutine Restore(self, solution)
@@ -636,9 +741,9 @@ contains
       character(len=16) :: tag
       character(len=32) :: constraint
       character(len=LINE_LENGTH) :: boundary_name
-      integer :: u, io, version, count, j
+      integer :: u, io, version, count, j, temperature_switch
       integer(int64) :: start, finish, position, next, index_bytes, record_end, history_bytes
-      real(kind=RP) :: target, coefficients(size(self%coefficients))
+      real(kind=RP) :: target, temperature, coefficients(size(self%coefficients))
 #ifdef _HAS_MPI_
       integer :: ierr
 #endif
@@ -665,8 +770,10 @@ contains
          if (position >= finish) call Fatal("Missing embedded control record; use restart policy = reset")
          read (u, iostat=io) tag, version, record_end
          if (io /= 0) call Fatal("Cannot read embedded control header")
-         if (tag /= RECORD_TAG .or. version /= RECORD_VERSION .or. record_end /= finish) &
+         if (tag /= RECORD_TAG .or. (version /= 1 .and. version /= RECORD_VERSION) .or. record_end /= finish) &
             call Fatal("Invalid embedded control record")
+         if (version == 1 .and. self%match_temperature) &
+            call Fatal("Legacy checkpoint has no temperature coupling state; use restart policy = reset")
          read (u, iostat=io) constraint, target
          if (io /= 0) call Fatal("Cannot read embedded control configuration")
          if (.not. ieee_is_finite(target)) call Fatal("Nonfinite control target")
@@ -680,12 +787,29 @@ contains
          if (self%evaluations < 0 .or. self%epoch < 0) call Fatal("Invalid controller history")
          inquire (unit=u, pos=position)
          history_bytes = 2_int64*int(self%evaluations, int64)*(storage_size(self%pressure)/8)
-         if (record_end-position /= history_bytes) call Fatal("Invalid embedded control history length")
+         if (record_end-position < history_bytes) call Fatal("Invalid embedded control history length")
          deallocate (self%pressures, self%residuals)
          allocate (self%pressures(max(16, self%evaluations)), self%residuals(max(16, self%evaluations)))
          self%pressures = 0; self%residuals = 0
          read (u, iostat=io) self%pressures(:self%evaluations), self%residuals(:self%evaluations)
          if (io /= 0) call Fatal("Cannot read embedded control history")
+         if (version == RECORD_VERSION) then
+            read(u, iostat=io) temperature_switch
+            if (io /= 0) call Fatal("Cannot read total-temperature control switch")
+            if (temperature_switch /= 0 .and. temperature_switch /= 1) call Fatal("Invalid total-temperature control switch")
+            if ((temperature_switch == 1) .neqv. self%match_temperature) &
+               call Fatal("Temperature matching mode changed; use restart policy = reset")
+            if (self%match_temperature) then
+               call CheckNames(u, self%temperature_source_names, record_end)
+               call CheckNames(u, self%temperature_target_names, record_end)
+               read(u, iostat=io) temperature
+               if (io /= 0) call Fatal("Cannot read applied total temperature")
+               if (.not. ieee_is_finite(temperature)) call Fatal("Nonfinite checkpoint total temperature")
+               if (temperature <= 0) call Fatal("Nonpositive checkpoint total temperature")
+            end if
+         end if
+         inquire(unit=u, pos=position)
+         if (position /= record_end) call Fatal("Invalid embedded control record length")
          close (u)
          if (.not. all(ieee_is_finite([self%pressure, self%flow_scale, &
                self%pressures(:self%evaluations), self%residuals(:self%evaluations)]))) &
@@ -699,8 +823,10 @@ contains
       if (MPI_Process%doMPIAction) then
          call MPI_Bcast(self%pressure, 1, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierr)
          call MPI_Bcast(self%epoch, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
+         if (self%match_temperature) call MPI_Bcast(temperature, 1, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierr)
       end if
 #endif
+      if (self%match_temperature) call ApplyTemperature(self, temperature)
       ! Retain completed responses; detection and partial means restart at restored p.
    end subroutine Restore
 

@@ -1,0 +1,119 @@
+! NTNU wind tunnel, zero prescribed static-pressure jump across the empty disk.
+Flow equations                  = NS
+mesh file name                  = MESH/Wind_turbine_disk_empty_cgns_g2_mesh.h5
+reference length (m)            = 1.0
+reference temperature (k)       = 288.8888888888889
+reference pressure (pa)         = 101325.0
+mach number                     = 0.02934378639405483
+Reynolds number                 = 665998.1
+Prandtl number                  = 0.72
+AOA theta                       = 0.0
+AOA phi                         = 0.0
+gravity direction               = [0.0,0.0,0.0]
+
+Polynomial order                = 2
+Discretization nodes            = Gauss
+inviscid discretization         = standard
+riemann solver                  = lax-friedrichs
+viscous discretization          = BR1
+LES model                       = Vreman
+use actuatorline                = .false.
+
+simulation type                 = time-accurate
+time integration                = explicit
+explicit method                 = rk3
+Number of time steps            = 20
+Convergence tolerance           = 1.0e-13
+cfl                             = 0.5
+dcfl                            = 0.5
+
+Output Interval                 = 20
+monitors flush interval         = 20
+autosave mode                   = iteration
+autosave interval               = 20
+solution file name              = RESULTS/wind_turbine_empty_disk.hsol
+save gradients with solution    = .false.
+restart                         = .false.
+restart file name               = RESULTS/wind_turbine_empty_disk.hsol
+
+! Inflow inherits the reference Mach, density and zero flow angles.
+#define boundary inlet
+   type = Inflow
+   pressure = 101325.0
+#end
+
+#define boundary outlet
+   type = Outflow
+   pressure = 101325.0
+#end
+
+! At x = 3.635 m the flow leaves the CFD domain through the disk.
+#define boundary disk_upstream
+   type = Outflow
+   pressure = 101325.0
+#end
+
+! At x = 3.685 m the flow enters the CFD domain again along +x.
+#define boundary disk_downstream
+   type = Inflow
+   pressure = 101325.0
+#end
+
+#define boundary disk_side
+   type = FreeSlipWall
+#end
+
+! Declared in the HDF5 zone table. Its paired faces are internal.
+#define boundary rotor_cylinder
+   type = FreeSlipWall
+#end
+
+#define boundary sideA__sideB
+   type = FreeSlipWall
+#end
+
+#define boundary top__bottom
+   type = FreeSlipWall
+#end
+
+#define surface monitor 1
+   name = tunnel-inlet-mass-flow
+   marker = inlet
+   variable = mass-flow
+#end
+
+#define surface monitor 2
+   name = tunnel-outlet-mass-flow
+   marker = outlet
+   variable = mass-flow
+#end
+
+#define surface monitor 3
+   name = disk-upstream-mass-flow
+   marker = disk_upstream
+   variable = mass-flow
+#end
+
+#define surface monitor 4
+   name = disk-downstream-mass-flow
+   marker = disk_downstream
+   variable = mass-flow
+#end
+
+#define surface monitor 5
+   name = disk-side-mass-flow
+   marker = disk_side
+   variable = mass-flow
+#end
+
+#define surface monitor 6
+   name = disk-upstream-pressure
+   marker = disk_upstream
+   variable = pressure-average
+#end
+
+#define surface monitor 7
+   name = disk-downstream-pressure
+   marker = disk_downstream
+   variable = pressure-average
+#end
