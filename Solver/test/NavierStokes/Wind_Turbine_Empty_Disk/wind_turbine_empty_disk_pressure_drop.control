@@ -1,5 +1,5 @@
-! NTNU wind tunnel, disk pressures from area averages in adA_g2p2_0000215483.hsol.
-! Prescribed static pressure drop (upstream minus downstream) = 10.171405 Pa.
+! NTNU wind tunnel, disk boundary data from adA_g2p2_0000215483.hsol.
+! Reference fluid-side static pressure drop (upstream minus downstream) = 10.171405 Pa.
 Flow equations                  = NS
 mesh file name                  = MESH/Wind_turbine_disk_empty_cgns_g2_mesh.h5
 mach number                     = 0.02934
@@ -42,11 +42,11 @@ restart file name               = RESULTS/wind_turbine_empty_disk_pressure_drop.
 #end
 
 ! At x = 3.685 m the flow enters the CFD domain again along +x.
+! Total conditions are mass-flow-weighted over the reference downstream disk face.
 #define boundary disk_downstream
-   type = Inflow
-   pressure = 101324.116276
-   ! Compensate for the change in sound speed to retain the reference velocity.
-   mach = 0.02934012794784982
+   type = TotalInflow
+   total pressure = 101369.403087
+   total temperature = 288.925267
 #end
 
 ! The paired rotor_cylinder faces are internal.

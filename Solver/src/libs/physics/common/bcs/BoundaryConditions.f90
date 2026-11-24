@@ -99,7 +99,7 @@ module BoundaryConditions
                   bc = TotalInflowBC_t(trim(zoneNames(zID)))
                end select
 #else
-               print*, "TotalInflow is only supported for compressible Navier-Stokes (laminar or SA)."
+               print*, "TotalInflow requires single-phase compressible Navier-Stokes."
                errorMessage(STD_OUT)
                error stop 99
 #endif
@@ -166,8 +166,7 @@ module BoundaryConditions
 
          if ( .not. lesActive .or. .not. allocated(BCs) ) return
          do bcID = 1, size(BCs)
-            if ( BCs(bcID) % bc % BCType .eq. "totalinflow" .or. &
-                 BCs(bcID) % bc % BCType .eq. "farfield" ) then
+            if ( BCs(bcID) % bc % BCType .eq. "farfield" ) then
                print*, trim(BCs(bcID) % bc % BCType), " supports laminar or SA Navier-Stokes; disable the LES model."
                errorMessage(STD_OUT)
                error stop 99
