@@ -10,9 +10,9 @@ module MassFlowBalanceController
    use BoundaryConditions, only: BCs
    use OutflowBCClass, only: OutflowBC_t
    use TotalInflowBCClass, only: TotalInflowBC_t
-   use SurfaceIntegrals, only: TotalTemperatureSurfaceMoments
+   use SurfaceIntegrals, only: TotalConditionSurfaceMoments
    use PhysicsStorage, only: Lref
-   use FluidData, only: refValues
+   use FluidData, only: refValues, thermodynamics
    use MassFlowMonitorManager, only: MassFlowManager_t, MassFlowStatistics_t, GetSolutionExtensionBounds
    use MPI_Process_Info, only: MPI_Process
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
@@ -26,15 +26,17 @@ module MassFlowBalanceController
 
    integer, parameter :: OFF = 0, WAIT_STABLE = 1, COLLECT_MEAN = 2, CONFIRM = 3, BALANCED = 4, ENDED = 5
    integer, parameter :: NO_ACTION = 0, START_MEAN = 1, UPDATE_PRESSURE = 2
+   integer, parameter :: NO_COUPLING = 0, MATCH_TEMPERATURE = 1, PRESSURE_WORK = 2
    character(len=16), parameter :: RECORD_TAG = "MASSFLOW-CONTROL"
-   integer, parameter :: RECORD_VERSION = 2
+   integer, parameter :: RECORD_VERSION = 3
    character(len=*), parameter :: REGION = "#define mass flow balance"
 
    type MassFlowBalanceController_t
       logical :: enabled = .false.
-      logical :: match_temperature = .false.
-      integer, allocatable :: temperature_sources(:), temperature_targets(:), temperature_target_zones(:)
-      character(len=LINE_LENGTH), allocatable :: temperature_source_names(:), temperature_target_names(:)
+      integer :: coupling = NO_COUPLING
+      real(kind=RP) :: work_pressure_rise = 0
+      integer, allocatable :: source_zones(:), target_bcs(:)
+      character(len=LINE_LENGTH), allocatable :: source_names(:), target_names(:)
       integer :: state = OFF, epoch = 0, evaluations = 0, phase_start = 0
       integer :: minimum_steps = 50
       integer :: log_unit = 0, last_block = 0
@@ -55,7 +57,7 @@ module MassFlowBalanceController
       procedure :: Finish => BalanceFinish
       procedure :: Save => BalanceSave
       procedure :: Close => BalanceClose
-      procedure :: UpdateTemperature => BalanceUpdateTemperature
+      procedure :: UpdateTotalConditions => BalanceUpdateTotalConditions
    end type MassFlowBalanceController_t
 
 
@@ -77,9 +79,10 @@ contains
                                                  "minimum pressure (pa)", "maximum pressure (pa)", "probe pressure step (pa)", &
                                                  "maximum pressure step (pa)", "relaxation", "relative mass tolerance", &
                                             "absolute mass tolerance (kg/s)", "mean error fraction", "average block duration (s)", &
-                                                 "minimum settle steps", "match total temperature", &
-                                                 "temperature source boundaries", "temperature target boundaries"]
-      integer, allocatable :: observed(:)
+                                                 "minimum settle steps", "coupling mode", &
+                                                 "coupling source boundaries", "coupling target boundaries", &
+                                                 "work pressure rise (pa)"]
+      integer, allocatable :: observed(:), target_zones(:)
       integer :: j, io, bc_id
       logical :: has_inlet, has_outlet
       real(kind=RP) :: initial_pressure, area, global_area
@@ -210,45 +213,74 @@ contains
 #endif
          if (global_area <= 0) call Fatal("Observed boundary has no global faces")
       end do
-      if (options%containsKey("match total temperature")) then
-         value = options%stringValueForKey("match total temperature", LINE_LENGTH)
-         read(value, *, iostat=io) self%match_temperature
-         if (io /= 0) call Fatal("Invalid match total temperature switch")
+      if (options%containsKey("coupling mode")) then
+         value = options%stringValueForKey("coupling mode", LINE_LENGTH)
+         select case (trim(value))
+         case ("total-temperature")
+            self%coupling = MATCH_TEMPERATURE
+         case ("pressure-rise")
+            self%coupling = PRESSURE_WORK
+         case default
+            call Fatal("Unsupported coupling mode: "//trim(value))
+         end select
       end if
-      if (self%match_temperature) then
-         if (.not. options%containsKey("temperature source boundaries") .or. &
-             .not. options%containsKey("temperature target boundaries")) &
-            call Fatal("Temperature matching requires explicit source and target boundaries")
-         names = options%stringValueForKey("temperature source boundaries", LINE_LENGTH)
-         call ResolveZones(mesh, names, self%temperature_sources)
-         names = options%stringValueForKey("temperature target boundaries", LINE_LENGTH)
-         call ResolveZones(mesh, names, self%temperature_target_zones)
-         allocate(self%temperature_source_names(size(self%temperature_sources)), &
-                  self%temperature_target_names(size(self%temperature_target_zones)), &
-                  self%temperature_targets(size(self%temperature_target_zones)))
-         do j = 1, size(self%temperature_sources)
-            bc_id = BoundaryId(mesh, self%temperature_sources(j))
-            if (trim(BCs(bc_id)%bc%BCType) /= "outflow") call Fatal("Temperature source must be outflow")
-            if (.not. any(self%controlled == self%temperature_sources(j))) &
-               call Fatal("Temperature source must be a controlled outlet")
-            self%temperature_source_names(j) = mesh%zones(self%temperature_sources(j))%name
+      if (self%coupling == PRESSURE_WORK) then
+         if (self%constraint /= "equal-mass-flow") call Fatal("Pressure-rise coupling requires constraint = equal-mass-flow")
+         if (.not. options%containsKey("work pressure rise (pa)")) call Fatal("Missing work pressure rise (pa)")
+         value = options%stringValueForKey("work pressure rise (pa)", LINE_LENGTH)
+         read(value, *, iostat=io) self%work_pressure_rise
+         if (io /= 0) call Fatal("Invalid work pressure rise")
+         if (.not. ieee_is_finite(self%work_pressure_rise)) call Fatal("Nonfinite work pressure rise")
+      else if (options%containsKey("work pressure rise (pa)")) then
+         call Fatal("Work pressure rise requires coupling mode = pressure-rise")
+      end if
+      if (self%coupling /= NO_COUPLING) then
+         if (.not. options%containsKey("coupling source boundaries") .or. &
+             .not. options%containsKey("coupling target boundaries")) &
+            call Fatal("Total-condition coupling requires explicit source and target boundaries")
+         names = options%stringValueForKey("coupling source boundaries", LINE_LENGTH)
+         call ResolveZones(mesh, names, self%source_zones)
+         names = options%stringValueForKey("coupling target boundaries", LINE_LENGTH)
+         call ResolveZones(mesh, names, target_zones)
+         allocate(self%source_names(size(self%source_zones)), &
+                  self%target_names(size(target_zones)), self%target_bcs(size(target_zones)))
+         do j = 1, size(self%source_zones)
+            bc_id = BoundaryId(mesh, self%source_zones(j))
+            if (trim(BCs(bc_id)%bc%BCType) /= "outflow") call Fatal("Coupling source must be outflow")
+            if (.not. any(self%controlled == self%source_zones(j))) &
+               call Fatal("Coupling source must be a controlled outlet")
+            self%source_names(j) = mesh%zones(self%source_zones(j))%name
          end do
-         do j = 1, size(self%temperature_target_zones)
-            if (.not. any(observed == self%temperature_target_zones(j))) &
-               call Fatal("Temperature target must be an observed inlet")
-            bc_id = BoundaryId(mesh, self%temperature_target_zones(j))
+         do j = 1, size(target_zones)
+            if (.not. any(observed == target_zones(j))) &
+               call Fatal("Coupling target must be an observed inlet")
+            bc_id = BoundaryId(mesh, target_zones(j))
             select type (bc => BCs(bc_id)%bc)
             type is (TotalInflowBC_t)
-               ! Validated here; T0 remains owned by the inlet BC.
+               if (self%coupling == PRESSURE_WORK) then
+                  if (.not. all(ieee_is_finite([bc%GetTotalTemperatureK(), bc%GetTotalPressurePa()]))) &
+                     call Fatal("Nonfinite initial inlet total conditions")
+                  if (bc%GetTotalTemperatureK() <= 0 .or. bc%GetTotalPressurePa() <= 0) &
+                     call Fatal("Initial inlet total conditions must be positive")
+               end if
             class default
-               call Fatal("Temperature target must be totalinflow")
+               call Fatal("Coupling target must be totalinflow")
             end select
-            self%temperature_targets(j) = bc_id
-            self%temperature_target_names(j) = mesh%zones(self%temperature_target_zones(j))%name
+            self%target_bcs(j) = bc_id
+            self%target_names(j) = mesh%zones(target_zones(j))%name
          end do
-      else if (options%containsKey("temperature source boundaries") .or. &
-               options%containsKey("temperature target boundaries")) then
-         call Fatal("Temperature boundary lists require match total temperature = .true.")
+         if (self%coupling == PRESSURE_WORK) then
+            do j = 1, size(observed)
+               if (any(self%source_zones == observed(j)) .or. any(target_zones == observed(j))) then
+                  if (self%coefficients(j) /= 1) call Fatal("Fluid work sources and targets need flow coefficient 1")
+               else
+                  if (self%coefficients(j) /= 0) call Fatal("Other observed boundaries need flow coefficient 0 for fluid work")
+               end if
+            end do
+         end if
+      else if (options%containsKey("coupling source boundaries") .or. &
+               options%containsKey("coupling target boundaries")) then
+         call Fatal("Coupling boundary lists require coupling mode")
       end if
       ! Store BC IDs after name resolution; monitor zone IDs remain separate.
       do j = 1, size(self%controlled)
@@ -344,8 +376,9 @@ contains
       integer :: ierr, packet(3)
 #endif
       if (.not. self%enabled) return
-      call self%UpdateTemperature(mesh)
-      if (self%state == BALANCED .or. self%state == ENDED) return
+      call self%UpdateTotalConditions(mesh)
+      if (self%state == ENDED) return
+      if (self%state == BALANCED .and. self%coupling == NO_COUPLING) return
       action = NO_ACTION
       if (MPI_Process%isRoot) then
          associate(statistics => self%statistics)
@@ -361,11 +394,13 @@ contains
                if (.not. all(ieee_is_finite([error, tolerance, drift, fluctuation, throughput]))) &
                   call Fatal("Nonfinite flow response")
                if (.not. ResponseIsUsable(self, statistics, tolerance, drift, fluctuation)) then
-                  self%reason = "waiting-for-mean-quality"
+                  if (self%state /= BALANCED) self%reason = "waiting-for-mean-quality"
                else if (throughput <= self%flow_floor) then
                   self%state = COLLECT_MEAN
                   call RestrictPressure(self, iteration, "no-throughflow")
-               else
+               else if (self%state /= BALANCED .or. abs(error) > tolerance) then
+                  ! Coupling still changes the prescribed inlet state after confirmation.
+                  ! A later usable response outside tolerance reopens pressure control.
                   confirming = self%state == CONFIRM
                   call RecordResponse(self, error)
                   if (abs(error) <= tolerance) then
@@ -419,37 +454,59 @@ contains
       end select
    end subroutine BalanceAfterStep
 
-   subroutine ApplyTemperature(self, temperature)
+   subroutine ApplyTotalConditions(self, temperature, pressure)
       class(MassFlowBalanceController_t), intent(in) :: self
       real(kind=RP), intent(in) :: temperature
-      integer :: j, status
-      do j = 1, size(self%temperature_targets)
-         select type (bc => BCs(self%temperature_targets(j))%bc)
-         type is (TotalInflowBC_t)
-            call bc%SetTotalTemperatureK(temperature, status)
-            if (status /= 0) call Fatal("Total-temperature setter rejected update")
-         end select
+      real(kind=RP), intent(in), optional :: pressure
+      integer :: j
+      do j = 1, size(self%target_bcs)
+         call ApplyInletConditions(self%target_bcs(j), temperature, pressure)
       end do
-   end subroutine ApplyTemperature
+   end subroutine ApplyTotalConditions
 
-   subroutine BalanceUpdateTemperature(self, mesh)
+   subroutine ApplyInletConditions(bc_id, temperature, pressure)
+      integer, intent(in) :: bc_id
+      real(kind=RP), intent(in) :: temperature
+      real(kind=RP), intent(in), optional :: pressure
+      integer :: status
+      select type (bc => BCs(bc_id)%bc)
+      type is (TotalInflowBC_t)
+         call bc%SetTotalConditions(temperature, pressure, status)
+         if (status /= 0) call Fatal("Total-inflow setter rejected update")
+      end select
+   end subroutine ApplyInletConditions
+
+   subroutine BalanceUpdateTotalConditions(self, mesh)
       class(MassFlowBalanceController_t), intent(in) :: self
       class(HexMesh), intent(inout) :: mesh
-      real(kind=RP) :: source(4), scale, temperature
-      if (.not. self%enabled .or. .not. self%match_temperature) return
+      real(kind=RP) :: source(6), mass_flow, volume_flow, temperature, inlet_temperature, inlet_pressure
+      logical :: fluid_work
+      if (.not. self%enabled .or. self%coupling == NO_COUPLING) return
+      fluid_work = self%coupling == PRESSURE_WORK
       ! Sample the accepted complete-step Q rather than stale RK face buffers.
-      call TotalTemperatureSurfaceMoments(mesh, self%temperature_sources, 1, source)
-      if (.not. all(ieee_is_finite(source))) call Fatal("Nonfinite total-temperature moments")
-      if (source(4) /= 0) call Fatal("Nonphysical state in total-temperature detection")
-      scale = refValues%rho*refValues%V*Lref**2
-      ! Invalid throughflow leaves each inlet's existing T0 unchanged.
-      if (source(1)*scale <= self%flow_floor) return
+      call TotalConditionSurfaceMoments(mesh, self%source_zones, fluid_work, source)
+      if (.not. all(ieee_is_finite(source))) call Fatal("Nonfinite total-condition moments")
+      if (source(4) /= 0) call Fatal("Nonphysical state on total-condition source")
+      mass_flow = source(1)*refValues%rho*refValues%V*Lref**2
+      ! Until there is usable throughflow, keep the prescribed inlet conditions.
+      if (mass_flow <= self%flow_floor) return
       if (source(3) > 1e-8_RP*source(1)) return
       temperature = source(2)/source(1)
       if (.not. ieee_is_finite(temperature)) call Fatal("Invalid extracted total temperature")
       if (temperature <= 0) call Fatal("Nonpositive extracted total temperature")
-      call ApplyTemperature(self, temperature)
-   end subroutine BalanceUpdateTemperature
+      if (.not. fluid_work) then
+         call ApplyTotalConditions(self, temperature)
+         return
+      end if
+      volume_flow = source(5)*refValues%V*Lref**2
+      if (volume_flow <= 0) return
+      inlet_temperature = temperature + self%work_pressure_rise*volume_flow/(mass_flow*thermodynamics%cp)
+      if (.not. ieee_is_finite(inlet_temperature)) call Fatal("Nonfinite inlet total temperature after fluid work")
+      if (inlet_temperature <= 0) call Fatal("Fluid work yields nonpositive inlet total temperature")
+      inlet_pressure = (source(6)/source(1))*refValues%p * &
+                       (inlet_temperature/temperature)**thermodynamics%gammaDivGammaMinus1
+      call ApplyTotalConditions(self, inlet_temperature, inlet_pressure)
+   end subroutine BalanceUpdateTotalConditions
 
    subroutine EnsureCapacity(self, needed)
       class(MassFlowBalanceController_t), intent(inout) :: self
@@ -696,27 +753,23 @@ contains
    subroutine BalanceSave(self, u)
       class(MassFlowBalanceController_t), intent(in) :: self
       integer, intent(in) :: u
-      integer :: io, temperature_switch
-      real(kind=RP) :: temperature
+      integer :: io, j, inlet_count
+      real(kind=RP) :: temperature, total_pressure
       integer(int64) :: position, bytes, record_end
       if (.not. self%enabled) return
-      temperature_switch = merge(1, 0, self%match_temperature)
-      if (self%match_temperature) then
-         select type (bc => BCs(self%temperature_targets(1))%bc)
-         type is (TotalInflowBC_t)
-            temperature = bc%GetTotalTemperatureK()
-         class default
-            call Fatal("Temperature target must be totalinflow")
-         end select
-      end if
       inquire (unit=u, pos=position)
       inquire (iolength=bytes) RECORD_TAG, RECORD_VERSION, record_end, self%constraint, self%target, &
          self%coefficients, self%pressure, self%flow_scale, self%epoch, self%evaluations, &
-         self%pressures(:self%evaluations), self%residuals(:self%evaluations), temperature_switch
+         self%pressures(:self%evaluations), self%residuals(:self%evaluations), self%coupling
       record_end = position + bytes + NamesBytes(self%observed_names) + NamesBytes(self%controlled_names)
-      if (self%match_temperature) then
+      if (self%coupling /= NO_COUPLING) then
          inquire(iolength=bytes) temperature
-         record_end = record_end + bytes + NamesBytes(self%temperature_source_names) + NamesBytes(self%temperature_target_names)
+         record_end = record_end + bytes + NamesBytes(self%source_names) + NamesBytes(self%target_names)
+         if (self%coupling == PRESSURE_WORK) then
+            inquire(iolength=bytes) temperature, total_pressure
+            ! The scalar slot used for temperature in mode 1 stores the pressure rise here.
+            record_end = record_end + size(self%target_bcs)*bytes
+         end if
       end if
       write (u, iostat=io) RECORD_TAG, RECORD_VERSION, record_end, self%constraint, self%target
       if (io /= 0) call Fatal("Cannot save embedded control header")
@@ -725,13 +778,28 @@ contains
       write (u, iostat=io) self%coefficients, self%pressure, self%flow_scale, self%epoch, self%evaluations, &
          self%pressures(:self%evaluations), self%residuals(:self%evaluations)
       if (io /= 0) call Fatal("Cannot save embedded control history")
-      write(u, iostat=io) temperature_switch
-      if (io /= 0) call Fatal("Cannot save total-temperature control switch")
-      if (self%match_temperature) then
-         call WriteNames(u, self%temperature_source_names)
-         call WriteNames(u, self%temperature_target_names)
-         write(u, iostat=io) temperature
-         if (io /= 0) call Fatal("Cannot save applied total temperature")
+      write(u, iostat=io) self%coupling
+      if (io /= 0) call Fatal("Cannot save total-condition coupling mode")
+      if (self%coupling /= NO_COUPLING) then
+         call WriteNames(u, self%source_names)
+         call WriteNames(u, self%target_names)
+         inlet_count = 1
+         if (self%coupling == PRESSURE_WORK) then
+            write(u, iostat=io) self%work_pressure_rise
+            if (io /= 0) call Fatal("Cannot save work pressure rise")
+            inlet_count = size(self%target_bcs)
+         end if
+         do j = 1, inlet_count
+            select type (bc => BCs(self%target_bcs(j))%bc)
+            type is (TotalInflowBC_t)
+               if (self%coupling == MATCH_TEMPERATURE) then
+                  write(u, iostat=io) bc%GetTotalTemperatureK()
+               else
+                  write(u, iostat=io) bc%GetTotalTemperatureK(), bc%GetTotalPressurePa()
+               end if
+               if (io /= 0) call Fatal("Cannot save applied inlet total conditions")
+            end select
+         end do
       end if
    end subroutine BalanceSave
 
@@ -741,12 +809,14 @@ contains
       character(len=16) :: tag
       character(len=32) :: constraint
       character(len=LINE_LENGTH) :: boundary_name
-      integer :: u, io, version, count, j, temperature_switch
+      integer :: u, io, version, count, j, coupling
       integer(int64) :: start, finish, position, next, index_bytes, record_end, history_bytes
-      real(kind=RP) :: target, temperature, coefficients(size(self%coefficients))
+      real(kind=RP) :: target, temperature, work_pressure_rise, coefficients(size(self%coefficients))
+      real(kind=RP), allocatable :: inlet_conditions(:,:)
 #ifdef _HAS_MPI_
       integer :: ierr
 #endif
+      if (self%coupling == PRESSURE_WORK) allocate(inlet_conditions(2,size(self%target_bcs)))
       if (MPI_Process%isRoot) then
          open (newunit=u, file=trim(solution), status="old", access="stream", form="unformatted", &
                action="read", iostat=io)
@@ -770,10 +840,8 @@ contains
          if (position >= finish) call Fatal("Missing embedded control record; use restart policy = reset")
          read (u, iostat=io) tag, version, record_end
          if (io /= 0) call Fatal("Cannot read embedded control header")
-         if (tag /= RECORD_TAG .or. (version /= 1 .and. version /= RECORD_VERSION) .or. record_end /= finish) &
+         if (tag /= RECORD_TAG .or. version < 1 .or. version > RECORD_VERSION .or. record_end /= finish) &
             call Fatal("Invalid embedded control record")
-         if (version == 1 .and. self%match_temperature) &
-            call Fatal("Legacy checkpoint has no temperature coupling state; use restart policy = reset")
          read (u, iostat=io) constraint, target
          if (io /= 0) call Fatal("Cannot read embedded control configuration")
          if (.not. ieee_is_finite(target)) call Fatal("Nonfinite control target")
@@ -793,21 +861,34 @@ contains
          self%pressures = 0; self%residuals = 0
          read (u, iostat=io) self%pressures(:self%evaluations), self%residuals(:self%evaluations)
          if (io /= 0) call Fatal("Cannot read embedded control history")
-         if (version == RECORD_VERSION) then
-            read(u, iostat=io) temperature_switch
-            if (io /= 0) call Fatal("Cannot read total-temperature control switch")
-            if (temperature_switch /= 0 .and. temperature_switch /= 1) call Fatal("Invalid total-temperature control switch")
-            if ((temperature_switch == 1) .neqv. self%match_temperature) &
-               call Fatal("Temperature matching mode changed; use restart policy = reset")
-            if (self%match_temperature) then
-               call CheckNames(u, self%temperature_source_names, record_end)
-               call CheckNames(u, self%temperature_target_names, record_end)
-               read(u, iostat=io) temperature
-               if (io /= 0) call Fatal("Cannot read applied total temperature")
-               if (.not. ieee_is_finite(temperature)) call Fatal("Nonfinite checkpoint total temperature")
-               if (temperature <= 0) call Fatal("Nonpositive checkpoint total temperature")
-            end if
+         coupling = NO_COUPLING
+         if (version >= 2) then
+            read(u, iostat=io) coupling
+            if (io /= 0) call Fatal("Cannot read total-condition coupling mode")
+            if (version == 2 .and. coupling > MATCH_TEMPERATURE) call Fatal("Invalid legacy coupling mode")
          end if
+         if (coupling /= self%coupling) call Fatal("Total-condition coupling mode changed; use restart policy = reset")
+         if (coupling /= NO_COUPLING) then
+            call CheckNames(u, self%source_names, record_end)
+            call CheckNames(u, self%target_names, record_end)
+         end if
+         select case (coupling)
+         case (MATCH_TEMPERATURE)
+            read(u, iostat=io) temperature
+            if (io /= 0) call Fatal("Cannot read applied total temperature")
+            if (.not. ieee_is_finite(temperature)) call Fatal("Nonfinite checkpoint total temperature")
+            if (temperature <= 0) call Fatal("Nonpositive checkpoint total temperature")
+         case (PRESSURE_WORK)
+            read(u, iostat=io) work_pressure_rise
+            if (io /= 0) call Fatal("Cannot read work pressure rise")
+            if (.not. ieee_is_finite(work_pressure_rise)) call Fatal("Nonfinite checkpoint work pressure rise")
+            if (work_pressure_rise /= self%work_pressure_rise) &
+               call Fatal("Work pressure rise changed; use restart policy = reset")
+            read(u, iostat=io) inlet_conditions
+            if (io /= 0) call Fatal("Cannot read applied inlet total conditions")
+            if (.not. all(ieee_is_finite(inlet_conditions))) call Fatal("Nonfinite checkpoint inlet total conditions")
+            if (any(inlet_conditions <= 0)) call Fatal("Nonpositive checkpoint inlet total conditions")
+         end select
          inquire(unit=u, pos=position)
          if (position /= record_end) call Fatal("Invalid embedded control record length")
          close (u)
@@ -823,10 +904,17 @@ contains
       if (MPI_Process%doMPIAction) then
          call MPI_Bcast(self%pressure, 1, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierr)
          call MPI_Bcast(self%epoch, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
-         if (self%match_temperature) call MPI_Bcast(temperature, 1, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierr)
+         if (self%coupling == MATCH_TEMPERATURE) call MPI_Bcast(temperature, 1, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierr)
+         if (allocated(inlet_conditions)) &
+            call MPI_Bcast(inlet_conditions, size(inlet_conditions), MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierr)
       end if
 #endif
-      if (self%match_temperature) call ApplyTemperature(self, temperature)
+      if (self%coupling == MATCH_TEMPERATURE) call ApplyTotalConditions(self, temperature)
+      if (allocated(inlet_conditions)) then
+         do j = 1, size(self%target_bcs)
+            call ApplyInletConditions(self%target_bcs(j), inlet_conditions(1,j), inlet_conditions(2,j))
+         end do
+      end if
       ! Retain completed responses; detection and partial means restart at restored p.
    end subroutine Restore
 

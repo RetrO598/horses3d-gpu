@@ -1,9 +1,16 @@
-! NTNU wind tunnel, disk boundary data from adA_g2p2_0000215483.hsol.
-! Reference fluid-side static pressure drop (upstream minus downstream) = 10.171405 Pa.
+! NTNU wind tunnel with mass-flow and pressure-work coupling across the empty disk.
+! Reference adA_g2p2_0000215483.tec: mass-flow-weighted p0, downstream minus upstream = -12.704263 Pa.
+! Reference p0_up = 101382.107349 Pa, p0_down = 101369.403087 Pa.
+! Calibrate the work input against this jump using the upstream reference state:
+! delta_p_work = (mass_flow/volume_flow)*cp*T0_up*((p0_down/p0_up)^((gamma-1)/gamma)-1).
 Flow equations                  = NS
 mesh file name                  = MESH/Wind_turbine_disk_empty_cgns_g2_mesh.h5
+reference length (m)            = 1.0
+reference temperature (k)       = 288.8888888888889
+reference pressure (pa)         = 101325.0
 mach number                     = 0.02934
 Reynolds number                 = 666666.67
+Prandtl number                  = 0.72
 AOA theta                       = 0.0
 AOA phi                         = 0.0
 
@@ -12,7 +19,10 @@ riemann solver                  = lax-friedrichs
 LES model                       = Vreman
 
 simulation type                 = time-accurate
+time integration                = explicit
+explicit method                 = rk3
 Number of time steps            = 100000000
+! Solver time uses Lref/Uref, about 0.1 s for this case.
 final time                      = 30.0
 Convergence tolerance           = 1.0e-13
 cfl                             = 0.5
@@ -21,10 +31,10 @@ dcfl                            = 0.5
 Output Interval                 = 2000
 autosave mode                   = time
 autosave interval               = 3.0
-solution file name              = RESULTS/wind_turbine_empty_disk_pressure_drop.hsol
+solution file name              = RESULTS/wind_turbine_empty_disk_coupling.hsol
 save gradients with solution    = .false.
 restart                         = .false.
-restart file name               = RESULTS/wind_turbine_empty_disk_pressure_drop.hsol
+restart file name               = RESULTS/wind_turbine_empty_disk_coupling.hsol
 
 ! Tunnel inlet and outlet use the freestream defaults.
 #define boundary inlet
@@ -39,14 +49,30 @@ restart file name               = RESULTS/wind_turbine_empty_disk_pressure_drop.
 #define boundary disk_upstream
    type = Outflow
    pressure = 101334.287681
+   mass flow statistics = .true.
+   mass flow statistics history capacity = 32768
+   mass flow statistics hop samples = 2000
+   mass flow statistics minimum samples = 6000
+   mass flow statistics adf lags = 64
+   mass flow statistics significance = 0.05
+   mass flow statistics relative std tolerance = 1e30
+   mass flow statistics restart policy = reset
 #end
 
 ! At x = 3.685 m the flow enters the CFD domain again along +x.
-! Total conditions are mass-flow-weighted over the reference downstream disk face.
+! Seed the inlet from the reference downstream disk face.
 #define boundary disk_downstream
    type = TotalInflow
    total pressure = 101369.403087
    total temperature = 288.925267
+   mass flow statistics = .true.
+   mass flow statistics history capacity = 32768
+   mass flow statistics hop samples = 2000
+   mass flow statistics minimum samples = 6000
+   mass flow statistics adf lags = 64
+   mass flow statistics significance = 0.05
+   mass flow statistics relative std tolerance = 1e30
+   mass flow statistics restart policy = reset
 #end
 
 ! The paired rotor_cylinder faces are internal.
@@ -141,4 +167,28 @@ restart file name               = RESULTS/wind_turbine_empty_disk_pressure_drop.
    name = disk-downstream-pressure
    marker = disk_downstream
    variable = pressure-average
+#end
+
+#define mass flow balance
+   enabled = .true.
+   constraint = equal-mass-flow
+   coupling mode = pressure-rise
+   coupling source boundaries = disk_upstream
+   coupling target boundaries = disk_downstream
+   work pressure rise (pa) = -12.700548
+   observed boundaries = disk_upstream, disk_downstream
+   controlled boundaries = disk_upstream
+   flow coefficients = 1, 1
+   reference mass flow (kg/s) = 6.753350
+   ! The endpoints bracket the frozen-state numerical flux sum for three archived empty-disk fields.
+   minimum pressure (pa) = 101000.0
+   maximum pressure (pa) = 101650.0
+   probe pressure step (pa) = 25.0
+   maximum pressure step (pa) = 30.0
+   relaxation = 0.7
+   relative mass tolerance = 5.0e-3
+   mean error fraction = 0.5
+   average block duration (s) = 0.05
+   minimum settle steps = 6000
+   restart policy = resume
 #end

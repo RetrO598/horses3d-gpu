@@ -221,9 +221,12 @@ pressure is held and observation continues. A restriction is logged once until
 its reason changes or pressure is updated. Nonfinite responses and invalid input
 remain fatal errors.
 
-Once balanced, the controller holds the last pressure while the solver continues
-according to its original convergence, time and iteration limits. The controller
-does not extend the flow solve. If the solver finishes first, the control log
+In pressure-only mode, the controller holds the last pressure after balance is
+confirmed. Both coupling modes continue monitoring the average mass flows and
+resume pressure adjustment when a later usable average exceeds the mass-flow
+tolerance. In all modes the solver continues according to its original
+convergence, time and iteration limits. If the controller is unbalanced when
+the solver finishes, the control log
 reports `calculation-ended-unbalanced` and the final pressure. Accepted flow errors
 are recorded in the response rows. Pressure-response history grows automatically; repeated
 observations at the current history point replace its response.
@@ -253,27 +256,28 @@ fingerprinting the solution or duplicating its iteration/time metadata.
 `restart policy = resume` restores completed responses and the current pressure;
 stability and partial averages are collected again, including at a previously
 balanced pressure. `restart policy = reset` discards controller history and uses
-the pressure configured in the control file. The current record format is required
-for resume; previous controller checkpoint formats are not supported.
+the pressure configured in the control file. Resume also supports version-1
+pressure-only records and version-2 records with optional temperature matching.
 Pressure changes do not overwrite solver residuals. Enabling balance does not
 disable p-adaptation, FMG initialization or IBM.
 
 ### Complete-step total-temperature matching
 
-An optional temperature feedback runs alongside the existing pressure controller:
+Select `coupling mode = total-temperature` to match the outlet and inlet total
+temperature while the pressure controller balances the flow.
 
 ```text
 #define mass flow balance
    enabled = .true.
    ! Existing mass-flow/pressure settings remain required.
-   match total temperature = .true.
-   temperature source boundaries = fan_inlet
-   temperature target boundaries = fan_outlet
+   coupling mode = total-temperature
+   coupling source boundaries = fan_inlet
+   coupling target boundaries = fan_outlet
    ! ... existing observed/controlled boundaries, pressure bounds, tolerances ...
 #end
 ```
 
-The default is disabled, preserving the original pressure-only behavior. Source
+Omit `coupling mode` for pressure-only control. In either coupling mode, source
 names must be controlled outflow boundaries; target names must be observed
 `totalinflow` boundaries. Both lists are explicit to avoid changing an unrelated
 external inlet. Multiple source patches form one aggregate mass-weighted total
@@ -289,10 +293,10 @@ The initial field is sampled before the first residual evaluation. Thereafter,
 every accepted complete step refreshes face states from the current solution,
 samples the source group and updates only the target BC total temperature in kelvin.
 Host and OpenACC data are synchronized before subsequent boundary evaluations.
-Total pressure and flow direction stay as configured. Updates remain active
-after the pressure controller enters `balanced`; no additional ADF gate or
-temperature smoothing delays them. The pressure detector/averaging logic is
-unchanged and observes the resulting thermally coupled flow response.
+Total pressure and flow direction stay as configured. Total temperature updates
+remain active after the pressure controller enters `balanced` and run at each
+complete step. The pressure controller checks the resulting average mass flows
+for departures from balance.
 
 Zero/negative net throughflow (using `flow floor (kg/s)`) or reverse source flux
 exceeding 1e-8 of net extraction holds the last valid prescribed temperature.
@@ -307,7 +311,7 @@ an update is used by the next full step. Unequal mass flows, nonuniform profiles
 and numerical fluxes can still yield an energy-flux mismatch. Equal prescribed
 total temperature alone does not prove exact discrete energy conservation.
 
-Controller checkpoint record version 2 additionally stores the temperature mode,
+Controller checkpoint records since version 2 also store the temperature mode,
 source/target names and the applied temperature read directly from the inlet BC.
 Resume validates this mapping and restores the temperature before the first
 residual evaluation. Version-1
@@ -316,3 +320,58 @@ on a version-1 record, or changing temperature mode/mapping on resume, requires
 `restart policy = reset`; old pressure-response history is then discarded because
 the boundary feedback problem has changed. Detector history is managed separately
 by each boundary's existing restart policy.
+
+### Work addition between paired boundaries
+
+For compressible NS without SA, enable work addition inside the mass-flow
+balance region. In CDVFan, `fan_inlet` is the CFD outflow and `fan_outlet`
+is the CFD inflow.
+
+```text
+#define mass flow balance
+   enabled = .true.
+   constraint = equal-mass-flow
+   observed boundaries = fan_inlet, fan_outlet
+   flow coefficients = 1, 1
+   controlled boundaries = fan_inlet
+   coupling mode = pressure-rise
+   coupling source boundaries = fan_inlet
+   coupling target boundaries = fan_outlet
+   work pressure rise (pa) = 300.0
+   ! Include the usual pressure bounds, pressure steps and averaging settings.
+#end
+```
+
+With `coupling mode = pressure-rise`, set `work pressure rise (pa)` to the
+prescribed signed `Δp0`. Positive values add work and negative values extract
+work. The resulting inlet total temperature must remain positive. Every paired
+patch has flow coefficient 1 because both fluxes use the outward CFD normal.
+Additional observed patches have coefficient 0. The controller adjusts the
+controlled outflow static pressure until the summed signed mass flow satisfies
+the configured tolerance.
+
+The controller integrates the interior solution over all source faces to obtain
+the signed outward mass flow `m_dot` in kg/s, volume flow `Q` in m³/s, and
+mass-flow-weighted means `<T0>` and `<p0>`. It computes local stagnation pressure
+as `p0 = p * (T0 / T)^(gamma / (gamma - 1))` before averaging. MPI sums the
+surface moments before the averages and work calculation.
+
+The target total conditions are
+`T0_in = <T0> + Δp0 * Q / (m_dot * cp)` and
+`p0_in = <p0> * (T0_in / <T0>)^(gamma / (gamma - 1))`. This gives
+`m_dot * cp * (T0_in - <T0>) = Δp0 * Q` for the prescribed states.
+`Δp0` sets the work per unit extracted volume, and the resulting total
+pressure rise equals `Δp0` in the low-Mach uniform-flow limit.
+
+All target `totalinflow` patches receive the same total conditions. Each target
+uses its configured `aoatheta` and `aoaphi` for the flow direction and solves
+for the speed from the inlet boundary equations. Configure positive total
+pressure and temperature on each target for startup. Those values, or the last
+valid values, are held when the source mass flow is at or below the flow floor,
+volume flow is nonpositive, or reverse mass flux exceeds 1e-8 of the net
+extraction. The controller samples the initial solution and each subsequent
+complete step, including after balance is confirmed.
+
+Version-3 controller records store the prescribed pressure rise and each
+target's applied total conditions. To enable work addition on a restart or
+change its mode, input or boundary mapping, use `restart policy = reset`.

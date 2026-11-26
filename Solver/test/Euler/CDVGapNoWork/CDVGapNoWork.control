@@ -152,9 +152,9 @@ mesh partitioning                = SFC
 #end
 
 #define mass flow balance
-   match total temperature = .true.
-   temperature source boundaries = fan_inlet
-   temperature target boundaries = fan_outlet
+   coupling mode = total-temperature
+   coupling source boundaries = fan_inlet
+   coupling target boundaries = fan_outlet
    enabled = .true.
    constraint = equal-mass-flow
    algorithm = safeguarded-secant

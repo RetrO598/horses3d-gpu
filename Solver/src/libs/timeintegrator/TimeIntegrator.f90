@@ -622,7 +622,7 @@
 !     -----------------------
 !
 #if defined(NAVIERSTOKES) && !defined(SPALARTALMARAS) && !defined(CAHNHILLIARD)
-      call self % massBalance % UpdateTemperature(sem % mesh)
+      call self % massBalance % UpdateTotalConditions(sem % mesh)
 #endif
       if( sem % mesh % IBM % active ) call sem % mesh % IBM % SemiImplicitCorrection( sem % mesh % elements, dt )     
       call ComputeTimeDerivative(sem % mesh, sem % particles, t, CTD_IGNORE_MODE)

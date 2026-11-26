@@ -44,7 +44,8 @@ module TotalInflowBCClass
          procedure         :: CreateDeviceData  => TotalInflowBC_CreateDeviceData
          procedure         :: ExitDeviceData    => TotalInflowBC_ExitDeviceData
          procedure         :: GetTotalTemperatureK => TotalInflowBC_GetTotalTemperatureK
-         procedure         :: SetTotalTemperatureK => TotalInflowBC_SetTotalTemperatureK
+         procedure         :: GetTotalPressurePa => TotalInflowBC_GetTotalPressurePa
+         procedure         :: SetTotalConditions => TotalInflowBC_SetTotalConditions
    end type TotalInflowBC_t
 !
 !  *******************************************************************
@@ -239,12 +240,19 @@ module TotalInflowBCClass
          temperature = self%T0 * refValues%T
       end function TotalInflowBC_GetTotalTemperatureK
 
-      subroutine TotalInflowBC_SetTotalTemperatureK(self, temperature, status)
+      function TotalInflowBC_GetTotalPressurePa(self) result(pressure)
+         class(TotalInflowBC_t), intent(in) :: self
+         real(kind=RP) :: pressure
+         pressure = self%p0 * refValues%p
+      end function TotalInflowBC_GetTotalPressurePa
+
+      subroutine TotalInflowBC_SetTotalConditions(self, temperature, pressure, status)
          use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
          class(TotalInflowBC_t), intent(inout) :: self
          real(kind=RP), intent(in) :: temperature
+         real(kind=RP), intent(in), optional :: pressure
          integer, intent(out) :: status
-         real(kind=RP) :: value
+         real(kind=RP) :: value, pressure_value
          status = 1
          if (.not. ieee_is_finite(temperature)) return
          if (temperature <= 0) return
@@ -253,12 +261,23 @@ module TotalInflowBCClass
          value = temperature / refValues%T
          if (.not. ieee_is_finite(value)) return
          if (value <= 0) return
+         if (present(pressure)) then
+            if (.not. ieee_is_finite(pressure) .or. .not. ieee_is_finite(refValues%p)) return
+            if (pressure <= 0 .or. refValues%p <= 0) return
+            pressure_value = pressure / refValues%p
+            if (.not. ieee_is_finite(pressure_value)) return
+            if (pressure_value <= 0) return
+         end if
          ! Same safe complete-step update contract as the outflow pressure setter.
          !$acc wait
          self%T0 = value
          !$acc update device(self%T0)
+         if (present(pressure)) then
+            self%p0 = pressure_value
+            !$acc update device(self%p0)
+         end if
          status = 0
-      end subroutine TotalInflowBC_SetTotalTemperatureK
+      end subroutine TotalInflowBC_SetTotalConditions
 
       subroutine TotalInflowBC_FlowState(self, mesh, zone)
          implicit none
